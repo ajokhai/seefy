@@ -1,6 +1,7 @@
 import "./style.css";
 import { conn, isTouch } from "./conn";
 import { guideScreen } from "./guide";
+import { inspectScreen } from "./inspect";
 import { liveScreen } from "./live";
 import { sensorsScreen } from "./sensors";
 import { h } from "./ui";
@@ -15,6 +16,7 @@ const icon = (path: string) => {
 const screens = {
   guide: { title: "Guide", make: guideScreen, icon: '<path d="M9 11l3 3 8-8"/><path d="M20 12v6a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h9"/>' },
   live: { title: "Live", make: liveScreen, icon: '<path d="M3 6l6-3 6 3 6-3v15l-6 3-6-3-6 3z"/><path d="M9 3v15M15 6v15"/>' },
+  scan: { title: "Scan", make: inspectScreen, icon: '<path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2"/><circle cx="12" cy="12" r="3.5"/>' },
   details: { title: "Details", make: sensorsScreen, icon: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>' },
 } as const;
 type Name = keyof typeof screens;
@@ -27,7 +29,8 @@ const main = h("main");
 const statusText = h("b", {}, "Connecting…");
 const statusSub = h("span", {}, "");
 const status = h("div", { class: "status" }, h("span", { class: "dot" }), h("div", {}, statusText, statusSub));
-const tabs = (Object.keys(screens) as Name[]).map((name) =>
+// The scan inspector is a desktop screen; phones get Guide, Live and Details.
+const tabs = (Object.keys(screens) as Name[]).filter((name) => !(isTouch && name === "scan")).map((name) =>
   h("a", { href: `#${name}`, class: "tab" }, icon(screens[name].icon), h("span", {}, screens[name].title)),
 );
 document.body.append(
