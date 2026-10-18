@@ -13,7 +13,7 @@ Everything runs as one web app on your local network. There's no cloud and nothi
 ```sh
 uv sync                                  # host dependencies (Python 3.12)
 cd web && npm install && npm run build   # web app
-cd .. && uv run seefy                    # prints the URL and a QR code
+cd .. && ./seefy                        # prints the URL and a QR code
 ```
 
 Open the URL on your phone (same WiFi). The first time, accept the certificate warning, or open the `http://…:8080` helper page to install the local certificate.

@@ -161,8 +161,7 @@ class Hub:
         elif kind == "keypoints":
             dev.capture_latency_ms = ema(dev.capture_latency_ms, recv - msg["t"])
             self.recorder.write("keypoints", {"device": dev.id, "recv": recv, **_strip(msg)})
-            await self._broadcast({"type": "keypoints", "device": dev.id, "t": msg["t"], "kp": msg.get("kp")},
-                                  roles=("viewer",))
+            await self._broadcast({"type": "keypoints", "device": dev.id, "t": msg["t"], "kp": msg.get("kp")})
 
     async def _on_pose(self, dev: Device, msg: dict, recv: float) -> None:
         dev.capture_latency_ms = ema(dev.capture_latency_ms, recv - msg["t"])
@@ -177,7 +176,7 @@ class Hub:
         }
         dev.last_pose = pose
         self.recorder.write("phone", pose)
-        await self._broadcast(pose, roles=("viewer",))
+        await self._broadcast(pose)
 
     async def _on_tags(self, dev: Device, msg: dict, recv: float) -> None:
         dets = {int(d["id"]): d["c"] for d in msg.get("dets", [])}

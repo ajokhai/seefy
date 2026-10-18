@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Seefy tags</title>
+    <style>
+      body { font: 14px/1.4 system-ui, sans-serif; margin: 0; background: #eee; color: #111; }
+      .controls { padding: 16px; background: #fff; border-bottom: 1px solid #ddd; display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+      .controls input { width: 5em; font: inherit; padding: 4px 6px; }
+      .page { width: 210mm; min-height: 277mm; margin: 12px auto; background: #fff; padding: 12mm; box-sizing: border-box;
+              display: flex; flex-direction: column; align-items: center; justify-content: space-around; page-break-after: always; }
+      .tag { display: flex; flex-direction: column; align-items: center; gap: 4mm; }
+      .tag img { image-rendering: pixelated; display: block; border: 6mm solid #fff; outline: 0.2mm dashed #bbb; }
+      .label { font-size: 4mm; text-align: center; }
+      .label b { font-size: 6mm; }
+      .grid { display: grid; }
+      .grid img { image-rendering: pixelated; display: block; }
+      .ruler { width: 100mm; border-top: 0.4mm solid #111; text-align: center; font-size: 3mm; padding-top: 1mm; }
+      @media print {
+        body { background: #fff; }
+        .controls { display: none; }
+        .page { margin: 0; }
+        @page { size: A4; margin: 0; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="controls">
+      <b>Seefy printables</b>
+      <label>Wall tags: <input id="count" type="number" min="1" max="49" value="8" /></label>
+      <button id="print">Print</button>
+      <span>Print at 100% / actual size (no "fit to page"). Check the 10 cm ruler on each page with a real ruler; if it's off, set the measured tag size in Sensors → Fidelity settings.</span>
+    </div>
+    <div id="pages">Loading…</div>
+    <script type="module" src="/src/print.ts"></script>
+  </body>
+</html>

@@ -1,0 +1,5 @@
+#!/bin/sh
+# Start the Seefy host. Sets PYTHONPATH explicitly because macOS can flag the
+# virtualenv's editable-install .pth file as hidden, and Python skips hidden .pth files.
+cd "$(dirname "$0")" || exit 1
+PYTHONPATH=server exec uv run python -m seefy "$@"
