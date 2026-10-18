@@ -104,6 +104,51 @@ def test_score_is_monotone_in_progress():
     assert scores == sorted(scores), scores
 
 
+def _wall_points(rng, n=3000):
+    """Points on the walls of a 4 x 3 x 2.5 m room."""
+    side = rng.integers(0, 4, n)
+    u, h = rng.random(n), rng.random(n) * 2.5
+    x = np.where(side == 0, 0, np.where(side == 1, 4, u * 4))
+    y = np.where(side == 2, 0, np.where(side == 3, 3, u * 3))
+    return np.stack([x, y, h], -1).tolist()
+
+
+def test_close_walk_with_points_has_good_detail():
+    frames = _room_walk()
+    r = coverage.score(frames, len(frames), GOOD_IMU, CFG, points=_wall_points(np.random.default_rng(1)))
+    assert r["components"]["detail"]["value"] > CFG["detail_extra"], r["components"]["detail"]
+    assert r["level"] == "extra"
+
+
+def test_far_away_scan_asks_to_move_closer():
+    big = {**CFG}
+    rng = np.random.default_rng(2)
+    pts = (np.array(_wall_points(rng)) * [4, 4, 1]).tolist()  # same walk, walls four times further away
+    frames = _room_walk()
+    r = coverage.score(frames, len(frames), GOOD_IMU, big, points=pts)
+    assert r["components"]["detail"]["value"] < CFG["detail_min"]
+    assert r["level"] == "short"
+    assert "closer" in r["hint"], r["hints"]
+
+
+def test_turning_too_fast_comes_first_but_doesnt_change_the_level():
+    frames = _room_walk()
+    calm = coverage.score(frames, len(frames), GOOD_IMU, CFG, turn_dps=10)
+    fast = coverage.score(frames, len(frames), GOOD_IMU, CFG, turn_dps=60)
+    assert calm["level"] == fast["level"] == "extra"
+    assert "slower" not in calm["hint"]
+    assert fast["hint"].startswith("Turn slower"), fast["hints"]
+    assert fast["components"]["pace"]["detail"] == "60°/s, limit 25°/s"
+
+
+def test_hints_are_ranked_weakest_first():
+    yaw = np.linspace(0, np.pi, 150)
+    frames = [_frame((2, 1.5, 1.35), y) for y in yaw]  # turning on the spot, half the room
+    r = coverage.score(frames, 300, None, CFG)
+    assert r["level"] == "short"
+    assert len(r["hints"]) >= 2 and r["hint"] == r["hints"][0]
+
+
 def test_docs_cover_every_setting():
     assert set(coverage.DEFAULTS) <= set(coverage.DOCS)
     for k in coverage.DEFAULTS:

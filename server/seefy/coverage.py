@@ -40,6 +40,14 @@ DEFAULTS: dict = {
     "scale_failed": 0.25,  # score when the accelerometer fit failed
     "scale_min": 0.0,  # the assumed-height fallback still gives a usable map
     "scale_extra": 0.8,
+    "detail_close_m": 2.0,  # median distance to what the camera sees that scores 1
+    "detail_far_m": 4.0,  # ...and that scores 0
+    "detail_points": 300,  # map points in view per frame that score 1
+    "detail_min": 0.4,
+    "detail_extra": 0.8,
+    "capture_fps": 5,  # frames per second the phone sends; sets the turn-speed limit
+    "max_turn_deg_per_frame": 5.0,  # turning more than this between frames loses frames (real scan: 46% placed under 5°, 18% at 5-10°)
+    "hfov_deg": 50.0,  # horizontal field of view used to decide which points are in view
 }
 
 DOCS: dict = {
@@ -68,6 +76,14 @@ DOCS: dict = {
     "scale_failed": ("Scale when the fit fails", "Confidence when the accelerometer didn't match the camera motion.", ""),
     "scale_min": ("Scale for enough", "Scale confidence needed for enough. Zero: the assumed phone height still gives a usable map.", ""),
     "scale_extra": ("Scale for extra", "Scale confidence needed to be extra sure.", ""),
+    "detail_close_m": ("Close enough", "Scanning from this close or closer to walls and furniture picks up full detail.", "m"),
+    "detail_far_m": ("Too far", "Scanning from this far away picks up too little detail to map well.", "m"),
+    "detail_points": ("Detail in view", "Map points in view per frame that count as plenty of detail.", "points"),
+    "detail_min": ("Detail for enough", "Detail score needed for the scan to count as enough.", ""),
+    "detail_extra": ("Detail for extra", "Detail score needed to be extra sure.", ""),
+    "capture_fps": ("Frames per second", "Frames the phone sends while scanning. Sets how fast you can turn.", "fps"),
+    "max_turn_deg_per_frame": ("Turn per frame", "Turning more than this between two frames breaks the map, so the app asks you to turn slower.", "°"),
+    "hfov_deg": ("Field of view", "How wide the camera sees, used to work out what's in view.", "°"),
 }
 
 LABELS = {
@@ -77,6 +93,8 @@ LABELS = {
     "parallax": "Viewpoints",
     "ceiling": "Ceiling",
     "scale": "Scale",
+    "detail": "Detail",
+    "pace": "Turn speed",
 }
 
 HINTS = {
@@ -85,6 +103,8 @@ HINTS = {
     "parallax": "Step to a new spot and look at the same walls again",
     "ceiling": "Tilt up at the ceiling lights now and then",
     "scale": "Keep the phone moving steadily so the motion sensor can measure scale",
+    "detail": "Move closer to the walls and furniture so they fill the view",
+    "pace": "Turn slower: the camera can't keep up",
 }
 
 
@@ -123,9 +143,40 @@ def _heading_hint(seen: np.ndarray, last_heading: float) -> str:
     return f"Turn {'left' if diff > 0 else 'right'} to face the part of the room you haven't scanned"
 
 
-def score(frames: list[dict], total_frames: int, imu: dict | None, cfg: dict) -> dict:
-    """Score a scan's coverage from its registered frames. See the module docstring."""
+def _detail(p: np.ndarray, fwd: np.ndarray, points, c: dict) -> dict:
+    """How close the camera was to what it saw, and how much of the map was in view, per frame."""
+    P = np.asarray(points, dtype=float).reshape(-1, np.asarray(points[0]).size)[:, :3]
+    tan_h = math.tan(math.radians(c["hfov_deg"]) / 2)
+    step = max(1, len(p) // 200)  # a sample of frames keeps this fast
+    dists, counts = [], []
+    for i in range(0, len(p), step):
+        rel = P - p[i]
+        z = rel @ fwd[i]
+        lateral = np.linalg.norm(rel - np.outer(z, fwd[i]), axis=1)
+        vis = (z > 0.2) & (lateral < tan_h * z * 1.3)  # a cone a little wider than the horizontal view
+        counts.append(int(vis.sum()))
+        if vis.any():
+            dists.append(float(np.median(z[vis])))
+    if not dists:
+        return {"value": 0.0, "detail": "nothing in view yet"}
+    d, n = float(np.median(dists)), float(np.median(counts))
+    near = _clamp((c["detail_far_m"] - d) / (c["detail_far_m"] - c["detail_close_m"]))
+    return {"value": near * _clamp(n / c["detail_points"]), "detail": f"about {d:.1f} m from what's in view"}
+
+
+def score(frames: list[dict], total_frames: int, imu: dict | None, cfg: dict, *,
+          points: list | None = None, turn_dps: float | None = None) -> dict:
+    """Score a scan's coverage from its registered frames. See the module docstring.
+
+    Optional: points, the map's 3D points (room frame), adds a "detail" component that asks
+    you to move closer; turn_dps, the phone's current turn speed in degrees per second, adds
+    a "pace" component and puts "turn slower" first whenever it's over the limit."""
     c = {**DEFAULTS, **(cfg or {})}
+    pace = None
+    if turn_dps is not None:
+        limit = c["max_turn_deg_per_frame"] * c["capture_fps"]
+        pace = {"value": _clamp(limit / turn_dps) if turn_dps > 0 else 1.0,
+                "detail": f"{turn_dps:.0f}°/s, limit {limit:.0f}°/s", "_over": turn_dps > limit}
     n = len(frames)
     total = max(int(total_frames), n)
     comps: dict[str, dict] = {}
@@ -139,6 +190,8 @@ def score(frames: list[dict], total_frames: int, imu: dict | None, cfg: dict) ->
         comps["scale"] = {"value": 0.0, "detail": "not enough frames yet"}
         hint = "Slow down: frames aren't being placed yet" if total >= 2 * c["min_frames"] else \
             "Walk slowly around the room with the camera facing the walls"
+        if pace is not None:
+            comps["pace"] = pace
         return _finish(comps, c, override_hint=hint)
 
     p, fwd = _views(frames)
@@ -180,6 +233,10 @@ def score(frames: list[dict], total_frames: int, imu: dict | None, cfg: dict) ->
         sc = _clamp((corr - c["scale_corr_low"]) / (c["scale_corr_high"] - c["scale_corr_low"]))
         sd = f"motion sensor agreement {corr:.2f}"
     comps["scale"] = {"value": _clamp(sc), "detail": sd}
+    if points is not None and len(points):
+        comps["detail"] = _detail(p, fwd, points, c)
+    if pace is not None:
+        comps["pace"] = pace
 
     heading_hint = _heading_hint(seen, float(heading[-1]))
     return _finish(comps, c, heading_hint=heading_hint)
@@ -187,6 +244,7 @@ def score(frames: list[dict], total_frames: int, imu: dict | None, cfg: dict) ->
 
 def _finish(comps: dict, c: dict, *, heading_hint: str = "Turn slowly to face every wall",
             override_hint: str | None = None) -> dict:
+    pace = comps.pop("pace", None)  # advisory: describes this moment, never gates the level
     for k, v in comps.items():
         v["label"] = LABELS[k]
 
@@ -204,17 +262,23 @@ def _finish(comps: dict, c: dict, *, heading_hint: str = "Turn slowly to face ev
     enough = c["enough"]
     if bottleneck < 1.0:
         level, s = "short", enough * bottleneck
-        weakest = min(to_enough, key=to_enough.get)
     else:
         e = min(to_extra.values())
         level = "extra" if e >= 1.0 else "enough"
         s = enough + (1 - enough) * e
-        weakest = min(to_extra, key=to_extra.get)
 
+    # Every component short of its target, weakest first, as one instruction each.
+    gaps = to_enough if level == "short" else to_extra
+    hints = [heading_hint if k == "headings" else HINTS[k] for k, g in sorted(gaps.items(), key=lambda kv: kv[1]) if g < 1.0]
     if override_hint is not None:
-        hint = override_hint
+        hints = [override_hint] + [h for h in hints if h != override_hint]
     elif level == "extra":
-        hint = "That's plenty. You can stop scanning"
-    else:
-        hint = heading_hint if weakest == "headings" else HINTS[weakest]
-    return {"score": round(float(s), 3), "level": level, "components": comps, "hint": hint}
+        hints = ["That's plenty. You can stop scanning"]
+    if pace is not None:
+        over = pace.pop("_over")
+        pace["label"] = LABELS["pace"]
+        comps["pace"] = pace
+        if over:
+            hints = [HINTS["pace"]] + hints
+    return {"score": round(float(s), 3), "level": level, "components": comps,
+            "hint": hints[0] if hints else "Keep going", "hints": hints[:3]}
