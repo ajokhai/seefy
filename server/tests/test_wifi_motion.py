@@ -43,6 +43,22 @@ def test_flat_baseline_does_not_make_one_tick_look_like_motion():
     assert not tr.motion().moving
 
 
+def test_slow_drift_is_not_motion():
+    rng = np.random.default_rng(3)
+    tr = motion.MotionTracker({"baseline_s": 10})
+    t, r = _series(rng, 30)
+    r = np.round(r + np.clip((t - 12000) / 1000 * 0.4, 0, None))  # router power creeps up 0.4 dB/s after 12 s
+    for ti, ri in zip(t, r):
+        tr.add(ti, ri)
+        m = tr.motion()
+        if ti > 14000 and m is not None:
+            assert not m.moving, (ti, m)
+    raw = motion.MotionTracker({"baseline_s": 10, "detrend": False})
+    for ti, ri in zip(t, r):
+        raw.add(ti, ri)
+    assert raw.motion().window_std_db > tr.motion().window_std_db
+
+
 def test_explicit_baseline_and_too_few_samples():
     tr = motion.MotionTracker()
     tr.set_baseline([-70, -70, -71, -70, -69])

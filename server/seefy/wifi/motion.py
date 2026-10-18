@@ -19,6 +19,7 @@ DEFAULTS: dict = {
     "min_std_db": 0.5,  # floor on the still spread (RSSI is quantised to 1 dB)
     "moving_ratio": 2.0,  # window spread this many times the still spread counts as motion
     "min_samples": 8,  # samples needed in a window before scoring
+    "detrend": True,  # remove each window's straight-line trend, so slow drift isn't counted as motion
 }
 
 DOCS: dict = {
@@ -28,13 +29,21 @@ DOCS: dict = {
     "min_std_db": ("Noise floor", "The smallest signal wobble treated as normal, because WiFi reports whole decibels.", "dB"),
     "moving_ratio": ("Motion threshold", "How many times wobblier than the still room the signal must be to count as movement.", "×"),
     "min_samples": ("Samples needed", "Readings needed in a window before it's scored.", ""),
+    "detrend": ("Ignore slow drift", "Ignore slow changes, like the router adjusting its power, so only quick wobbles from a moving body count.", ""),
 }
 
 
-def spread(rssi) -> float:
-    """Standard deviation of RSSI values, in dB."""
+def spread(rssi, t_ms=None) -> float:
+    """Standard deviation of RSSI values, in dB. Given times, a straight-line trend is removed first,
+    so slow drift (router power or rate changes, well under 0.1 Hz) isn't mistaken for a moving body."""
     a = np.asarray(rssi, dtype=float)
-    return float(a.std()) if a.size > 1 else 0.0
+    if a.size < 2:
+        return 0.0
+    if t_ms is not None and a.size >= 3:
+        t = np.asarray(t_ms, dtype=float)
+        if np.ptp(t) > 0:
+            a = a - np.polyval(np.polyfit(t - t[0], a, 1), t - t[0])
+    return float(a.std())
 
 
 @dataclass
@@ -80,7 +89,7 @@ class MotionTracker:
         if n < self.c["min_samples"]:
             return None
         base = self.baseline_std if self.baseline_std is not None else max(self.c["min_std_db"], spread(self._base))
-        w = spread([r for _, r in self._win])
+        w = spread([r for _, r in self._win], [t for t, _ in self._win] if self.c["detrend"] else None)
         ratio = max(w, self.c["min_std_db"]) / base
         return Motion(score=round(ratio, 2), moving=ratio >= self.c["moving_ratio"], window_std_db=round(w, 2),
                       baseline_std_db=round(base, 2), samples=n)
