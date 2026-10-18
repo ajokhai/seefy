@@ -3,42 +3,48 @@
 
 import { h } from "./ui";
 
-declare global {
-  interface Window {
-    cv: any;
-  }
-}
-
-async function loadCv(): Promise<any> {
-  await new Promise<void>((resolve, reject) => {
-    const s = document.createElement("script");
-    s.src = "/vendor/opencv.js";
-    s.onload = () => resolve();
-    s.onerror = () => reject(new Error("could not load OpenCV.js"));
-    document.head.append(s);
+// OpenCV.js runs in the tag worker: compiling its 10 MB WebAssembly on the main thread can stall the page.
+function startWorker(): Promise<Worker> {
+  const w = new Worker("/tag-worker.js");
+  return new Promise((resolve, reject) => {
+    w.onmessage = (e) => (e.data.type === "ready" ? resolve(w) : reject(new Error(e.data.error)));
+    w.postMessage({ type: "init", url: "/vendor/opencv.js", settings: {} });
   });
-  let cv = window.cv;
-  if (cv instanceof Promise) cv = await cv;
-  else if (!cv.Mat) await new Promise((r) => (cv.onRuntimeInitialized = r));
-  return cv;
 }
 
-function markerImg(cv: any, dict: any, id: number, sizeMm: number): HTMLImageElement {
-  const mat = new cv.Mat();
-  cv.generateImageMarker(dict, id, 400, mat, 1); // whole image = the black square the solver measures
-  const canvas = document.createElement("canvas");
-  cv.imshow(canvas, mat);
-  mat.delete();
-  return h("img", { src: canvas.toDataURL("image/png"), style: `width:${sizeMm}mm;height:${sizeMm}mm`, alt: `tag ${id}` });
+async function markerUrls(w: Worker, ids: number[], px = 400): Promise<Map<number, string>> {
+  const urls = new Map<number, string>();
+  await new Promise<void>((resolve) => {
+    w.onmessage = (e) => {
+      if (e.data.type !== "marker") return;
+      const { id, pixels } = e.data;
+      const canvas = document.createElement("canvas");
+      canvas.width = canvas.height = px;
+      const img = canvas.getContext("2d")!.createImageData(px, px);
+      for (let i = 0; i < pixels.length; i++) {
+        img.data[4 * i] = img.data[4 * i + 1] = img.data[4 * i + 2] = pixels[i];
+        img.data[4 * i + 3] = 255;
+      }
+      canvas.getContext("2d")!.putImageData(img, 0, 0);
+      urls.set(id, canvas.toDataURL("image/png"));
+      if (urls.size === ids.length) resolve();
+    };
+    for (const id of ids) w.postMessage({ type: "marker", id, px });
+  });
+  return urls;
 }
 
 const ruler = () => h("div", { class: "ruler" }, "10 cm — check with a ruler");
 
 async function main() {
-  const [cv, cfg] = await Promise.all([loadCv(), fetch("/api/config").then((r) => r.json())]);
+  const [worker, cfg] = await Promise.all([startWorker(), fetch("/api/config").then((r) => r.json())]);
   const tr = cfg.values.tracking;
   const lens = cfg.values.lens;
-  const dict = cv.getPredefinedDictionary(cv.DICT_APRILTAG_36h11);
+  const boardIds = Array.from({ length: lens.board_cols * lens.board_rows }, (_, i) => lens.board_first_id + i);
+  const roomIds = Array.from({ length: tr.room_tag_max_id + 1 }, (_, i) => i);
+  const urls = await markerUrls(worker, [...roomIds, ...boardIds]);
+  const markerImg = (id: number, sizeMm: number) =>
+    h("img", { src: urls.get(id)!, style: `width:${sizeMm}mm;height:${sizeMm}mm`, alt: `tag ${id}` });
   const countInput = document.getElementById("count") as HTMLInputElement;
   const pages = document.getElementById("pages")!;
 
@@ -49,7 +55,7 @@ async function main() {
 
     out.push(h("div", { class: "page" },
       h("div", { class: "tag" },
-        markerImg(cv, dict, origin, tr.origin_tag_size_m * 1000),
+        markerImg(origin, tr.origin_tag_size_m * 1000),
         h("div", { class: "label" },
           h("b", {}, `Tag ${origin} · FLOOR ORIGIN`), h("br"),
           `${tr.origin_tag_size_m * 100} cm black square. Lay it flat on the floor in a spot the camera sees often.`, h("br"),
@@ -61,7 +67,7 @@ async function main() {
       out.push(h("div", { class: "page" },
         ...wallIds.slice(i, i + 2).map((id) =>
           h("div", { class: "tag" },
-            markerImg(cv, dict, id, tr.tag_size_m * 1000),
+            markerImg(id, tr.tag_size_m * 1000),
             h("div", { class: "label" }, h("b", {}, `Tag ${id}`), h("br"),
               `${tr.tag_size_m * 100} cm. Stick upright on a wall, flat, roughly chest height. Spread tags around each room.`))),
         ruler()));
@@ -73,7 +79,7 @@ async function main() {
       class: "grid",
       style: `grid-template-columns:repeat(${lens.board_cols},${tagMm}mm);gap:${gapMm}mm;padding:${gapMm}mm`,
     });
-    for (let i = 0; i < lens.board_cols * lens.board_rows; i++) grid.append(markerImg(cv, dict, lens.board_first_id + i, tagMm));
+    for (let i = 0; i < lens.board_cols * lens.board_rows; i++) grid.append(markerImg(lens.board_first_id + i, tagMm));
     out.push(h("div", { class: "page" },
       h("div", { class: "label" }, h("b", {}, "Lens calibration grid"), h("br"),
         "Tape it flat to a table or wall. Any print scale works for the lens, but keep it flat."),

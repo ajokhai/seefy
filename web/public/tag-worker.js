@@ -218,6 +218,13 @@ self.onmessage = async (e) => {
       applySettings(m.settings);
     } else if (m.type === "map") {
       map = m.tags || {};
+    } else if (m.type === "marker") {
+      // Grayscale marker image for printing (the whole image is the black square).
+      const mat = new cv.Mat();
+      cv.generateImageMarker(dict, m.id, m.px, mat, 1);
+      const pixels = new Uint8Array(mat.data);
+      mat.delete();
+      self.postMessage({ type: "marker", id: m.id, px: m.px, pixels }, [pixels.buffer]);
     } else if (m.type === "frame") {
       const t0 = performance.now();
       const dets = detect(m.image, m.scale);
