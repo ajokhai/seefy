@@ -143,3 +143,81 @@ class Config:
 
     def snapshot(self) -> dict:
         return copy.deepcopy(self.values)
+
+
+# Plain-language help for every setting, shown next to it in the app.
+# section -> {"_": (title, what the section is for), key: (label, explanation, unit)}
+DOCS: dict[str, dict[str, tuple]] = {
+    "scan": {
+        "_": ("Room scan", "The default way to map a room: no markers. Affects how the phone records and how the laptop builds the map."),
+        "capture_fps": ("Frames per second", "How many camera frames the phone sends while scanning. More helps fast movement but takes longer to process.", "fps"),
+        "capture_max_side": ("Frame size", "Longest side of each frame sent. Bigger shows more detail but uploads and processes slower.", "px"),
+        "jpeg_quality": ("Image quality", "JPEG quality of uploaded frames, 0 to 1. Lower uploads faster but loses fine detail.", ""),
+        "camera_model": ("Lens model", "How lens distortion is modelled. SIMPLE_RADIAL suits phone main cameras; OPENCV for wide lenses.", ""),
+        "max_image_size": ("Processing size", "Frames are shrunk to this before finding features. Larger is more precise and slower.", "px"),
+        "max_features": ("Features per frame", "How many distinctive points (corners, edges, lights) are kept per frame. More is sturdier in plain rooms, but slower.", ""),
+        "match_overlap": ("Frames compared", "Each frame is compared with this many frames before and after it. Raise it if scans break apart.", "frames"),
+        "floor_percentile": ("Floor detection", "The floor is placed at this low percentile of point heights. Raise it if the floor comes out too low.", "%"),
+        "camera_height_m": ("Phone height (fallback)", "Assumed height of the phone during the scan. Only used for scale when the accelerometer fit fails.", "m"),
+        "imu_min_correlation": ("Accelerometer agreement", "How well the accelerometer must match the camera motion before it's trusted for scale (0 to 1).", ""),
+        "max_points": ("Points shown", "How many map points are kept for the room view.", ""),
+    },
+    "tracking": {
+        "_": ("Tag tracking (optional)", "Only used if you place tags (printed or shown on screens) for live, extra-accurate tracking."),
+        "tag_size_m": ("Tag size", "Edge length of the black square of each tag. Must match the real size exactly; it sets the map's scale.", "m"),
+        "origin_tag_id": ("Origin tag", "Which tag defines the room's starting point and direction.", ""),
+        "origin_mount": ("Origin placement", "floor: lying flat. upright: standing on a screen or wall.", ""),
+        "origin_height_m": ("Origin height", "For an upright origin: height of the tag's centre above the floor.", "m"),
+        "origin_tag_size_m": ("Origin tag size", "Edge length of the origin tag (printed bigger because it's seen at an angle).", "m"),
+        "tag_sizes": ("Per-tag sizes", "Sizes for individual tags, e.g. tags on different screens. JSON like {\"3\": 0.142}.", "m"),
+        "room_tag_max_id": ("Highest room tag", "Tags numbered above this are ignored by tracking (the calibration grid uses 200+).", ""),
+        "capture_width": ("Camera width", "Requested camera resolution, width.", "px"),
+        "capture_height": ("Camera height", "Requested camera resolution, height.", "px"),
+        "detect_scale": ("Detection scale", "Shrink frames before looking for tags. 0.5 is about 4x faster but sees less far.", ""),
+        "detect_max_fps": ("Detection rate", "Maximum tag detections per second.", "fps"),
+        "corner_refinement": ("Corner precision", "none is fastest, subpix is precise, apriltag is the most precise and slowest.", ""),
+        "min_tag_px": ("Smallest tag", "Tags smaller than this on screen are ignored as too imprecise.", "px"),
+        "max_reproj_px": ("Pose quality limit", "Phone positions that fit the tags worse than this are thrown away.", "px"),
+        "body_offset_m": ("Body offset", "Distance from a chest-height phone back to the centre of your body. Applies to every body-position label.", "m"),
+    },
+    "mapping": {
+        "_": ("Tag map (optional)", "How tag positions are worked out from what the camera sees."),
+        "keyframe_interval_s": ("Time between samples", "Minimum time between stored tag observations.", "s"),
+        "min_tags_per_frame": ("Tags per sample", "A frame must show this many tags to link them.", ""),
+        "max_frames": ("Samples used", "How many observations the map uses, across all passes.", ""),
+        "huber_px": ("Outlier tolerance", "Lower ignores bad detections more aggressively.", "px"),
+        "min_obs_per_tag": ("Sightings needed", "A tag must be seen this many times before it joins the map.", ""),
+        "solve_debounce_s": ("Solve delay", "Wait this long after new data before re-solving.", "s"),
+    },
+    "lens": {
+        "_": ("Lens calibration (optional)", "Measuring the phone camera's lens with a grid of tags. Improves tag tracking accuracy."),
+        "board_cols": ("Grid columns", "Tags across the calibration grid.", ""),
+        "board_rows": ("Grid rows", "Tags down the calibration grid.", ""),
+        "board_first_id": ("First grid tag", "Number of the grid's first tag.", ""),
+        "board_gap_ratio": ("Grid spacing", "Gap between grid tags, as a fraction of a tag's size.", ""),
+        "min_tags_per_view": ("Tags per view", "Grid tags that must be visible for a view to count.", ""),
+        "min_views": ("Views needed", "Views collected before calibrating.", ""),
+        "max_views": ("Views kept", "The best views kept across calibration passes.", ""),
+        "fix_k3": ("Simple distortion", "Use a simpler distortion model. Turn off only for wide or fisheye lenses.", ""),
+        "outlier_view_factor": ("Bad view cutoff", "Views with error above this many times the median are dropped.", "×"),
+    },
+    "sync": {
+        "_": ("Clock sync", "Keeps the phone's timestamps on the laptop's clock. Each 10 ms of error is about 1.4 cm of position error at walking pace."),
+        "interval_s": ("Sync interval", "Time between rounds of clock pings.", "s"),
+        "burst": ("Pings per round", "How many pings per round.", ""),
+        "window": ("Samples kept", "How many recent pings the estimate uses.", ""),
+        "rtt_slack_ms": ("Trusted pings", "Pings within this much of the fastest round trip are trusted.", "ms"),
+    },
+    "teacher": {
+        "_": ("Skeleton teacher (later)", "For training full-body poses. Not used yet."),
+        "model": ("Pose model", "lite is fastest, heavy is most accurate.", ""),
+        "min_visibility": ("Joint confidence", "Joints less certain than this are ignored.", ""),
+        "stand_pose_average_s": ("Stand averaging", "Time spent locating the phone stand.", "s"),
+    },
+    "learn": {
+        "_": ("Learn walks (later)", "For training WiFi sensing. Not used yet."),
+        "baseline_s": ("Empty-room capture", "Length of the empty-room recording before a walk.", "s"),
+        "coverage_cell_m": ("Coverage grid", "Size of each floor square in the coverage map.", "m"),
+        "target_samples_per_cell": ("Samples per square", "When a floor square counts as covered.", ""),
+    },
+}

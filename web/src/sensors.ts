@@ -28,9 +28,9 @@ export function sensorsScreen(): { el: HTMLElement; destroy: () => void } {
         "More fixed WiFi devices spread around the space, and more learn passes, both improve fidelity.")),
     h("section", { class: "card" }, h("h3", {}, "Recorded passes"), sessions),
     h("section", { class: "card" },
-      h("h3", {}, "Fidelity settings"),
+      h("h3", {}, "Settings"),
       h("p", { class: "muted" },
-        "Every setting that affects accuracy. A snapshot is saved with each recorded pass so you can compare results. See docs/FIDELITY.md."),
+        "Everything that affects accuracy, grouped by what it's for. Changed settings are highlighted. Each recording saves a copy of the settings, so you can compare passes made with different values."),
       settings),
   );
 
@@ -106,48 +106,70 @@ export function sensorsScreen(): { el: HTMLElement; destroy: () => void } {
   }
 
   async function renderSettings() {
-    const { values, overrides } = await conn.api("/api/config");
+    const { values, overrides, docs } = await conn.api("/api/config");
     const inputs: [string, string, HTMLInputElement | HTMLSelectElement, any][] = [];
-    const sections = Object.entries<any>(values).map(([section, keys]) =>
-      h("fieldset", {},
-        h("legend", {}, section),
-        ...Object.entries<any>(keys).map(([key, v]) => {
+    const choices: Record<string, string[]> = {
+      corner_refinement: ["none", "subpix", "contour", "apriltag"],
+      model: ["lite", "full", "heavy"],
+      origin_mount: ["floor", "upright"],
+      camera_model: ["SIMPLE_RADIAL", "RADIAL", "OPENCV", "PINHOLE"],
+    };
+    const order = Object.keys(docs ?? values);
+    const sections = order.filter((sec) => values[sec]).map((section, n) => {
+      const [title, about] = docs?.[section]?._ ?? [section, ""];
+      const changedCount = Object.keys(overrides?.[section] ?? {}).length;
+      return h("details", { class: "setting-group", open: n === 0 },
+        h("summary", {}, h("span", {}, title), changedCount ? h("span", { class: "badge" }, `${changedCount} changed`) : null),
+        h("p", { class: "muted" }, about),
+        ...Object.entries<any>(values[section]).map(([key, v]) => {
+          const [label, help, unit] = docs?.[section]?.[key] ?? [key, "", ""];
           let input: HTMLInputElement | HTMLSelectElement;
           if (typeof v === "boolean") {
             input = h("input", { type: "checkbox" });
             (input as HTMLInputElement).checked = v;
-          } else if (key === "corner_refinement") {
-            input = h("select", {}, ...["none", "subpix", "contour", "apriltag"].map((o) => h("option", { value: o }, o)));
+          } else if (choices[key]) {
+            input = h("select", {}, ...choices[key].map((o) => h("option", { value: o }, o)));
             input.value = v;
-          } else if (key === "model") {
-            input = h("select", {}, ...["lite", "full", "heavy"].map((o) => h("option", { value: o }, o)));
-            input.value = v;
+          } else if (typeof v === "object") {
+            input = h("input", { type: "text", value: JSON.stringify(v) });
           } else {
             input = h("input", { type: typeof v === "number" ? "number" : "text", step: "any", value: v });
           }
           inputs.push([section, key, input, v]);
           const changed = overrides?.[section]?.[key] !== undefined;
-          return h("label", { class: changed ? "changed" : "" }, h("span", {}, key), input);
+          return h("label", { class: `setting ${changed ? "changed" : ""}` },
+            h("div", { class: "setting-text" }, h("b", {}, label), h("span", { class: "muted" }, help)),
+            h("div", { class: "setting-input" }, input, unit ? h("span", { class: "unit" }, unit) : null));
         }),
-      ),
-    );
+      );
+    });
     const save = h("button", {
       class: "primary",
       onclick: async () => {
         const changes: any = {};
         for (const [section, key, input, orig] of inputs) {
-          const val = input instanceof HTMLInputElement && input.type === "checkbox" ? input.checked
-            : typeof orig === "number" ? Number(input.value) : input.value;
+          let val: any;
+          if (input instanceof HTMLInputElement && input.type === "checkbox") val = input.checked;
+          else if (typeof orig === "number") val = Number(input.value);
+          else if (typeof orig === "object") {
+            try {
+              val = JSON.parse(input.value || "{}");
+            } catch {
+              toast(`${key}: not valid JSON`);
+              return;
+            }
+            if (JSON.stringify(val) === JSON.stringify(orig)) continue;
+          } else val = input.value;
           if (val !== orig) (changes[section] ??= {})[key] = val;
         }
         await conn.api("/api/config", "PUT", changes);
         toast("Settings saved");
         renderSettings();
       },
-    }, "Save");
+    }, "Save changes");
     const reset = h("button", {
       onclick: async () => {
-        if (confirm("Reset all settings to defaults?")) {
+        if (confirm("Reset all settings to their defaults?")) {
           await conn.api("/api/config/reset", "POST");
           renderSettings();
         }

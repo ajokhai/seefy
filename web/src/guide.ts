@@ -1,34 +1,36 @@
-// Guide screen (phone): setup as a short sequence of steps, one at a time.
+// Guide screen: setup as a short sequence of steps, one at a time.
 //
-// Each step has one instruction, one main button, and a clear "done" state.
-// Steps that the app can check (lens calibrated, tags mapped) tick themselves;
-// the rest are confirmed with a tap. Progress is remembered on this phone.
+// Default (markerless): scan the room with the phone, the laptop builds the map, check it on Live.
+// Optional tag mode: printed or on-screen tags for live, extra-accurate tracking.
+// Each step has one instruction and one main button; progress is remembered on this phone.
 
-import { conn } from "./conn";
+import { openCameraSheet, requestMotionPermission, type CameraSheet } from "./camera";
+import { conn, isTouch } from "./conn";
+import { ScanRecorder } from "./scan";
 import { Tracker, type FrameResult } from "./tracker";
 import { fmt, h, toast } from "./ui";
 
-type StepId = "print" | "place" | "lens" | "map" | "walk";
+type Mode = "scan" | "tags";
 
 interface Step {
-  id: StepId;
+  id: string;
   title: string;
+  isDone: () => boolean;
   render: (body: HTMLElement) => void;
 }
 
-const STORE = "seefy.guide";
-
-function loadDone(): Set<StepId> {
+function load<T>(key: string, fallback: T): T {
   try {
-    return new Set(JSON.parse(localStorage.getItem(STORE) ?? "[]"));
+    const v = localStorage.getItem(key);
+    return v == null ? fallback : JSON.parse(v);
   } catch {
-    return new Set();
+    return fallback;
   }
 }
 
-function saveDone(done: Set<StepId>): void {
+function save(key: string, value: unknown): void {
   try {
-    localStorage.setItem(STORE, JSON.stringify([...done]));
+    localStorage.setItem(key, JSON.stringify(value));
   } catch {
     /* private mode: progress just isn't remembered */
   }
@@ -37,242 +39,157 @@ function saveDone(done: Set<StepId>): void {
 let tracker: Tracker | null = null;
 
 export function guideScreen(): { el: HTMLElement; destroy: () => void } {
-  const done = loadDone();
-  let open: StepId | null = null; // step the user tapped to revisit
+  let mode: Mode = load("seefy.guide.mode", "scan");
+  const done = new Set<string>(load("seefy.guide.done", []));
+  let open: string | null = null;
   const offs: (() => void)[] = [];
 
-  // One shared camera view, moved into whichever step needs it.
-  const video = h("video", { playsinline: true, muted: true, autoplay: true });
-  const overlay = h("canvas", { class: "overlay" });
-  const pill = h("div", { class: "pill" }, "Camera off");
-  const camera = h("div", { class: "camera live" }, video, overlay, pill);
-  if (!tracker) tracker = new Tracker(video);
-  else {
-    tracker.video = video;
-    if (tracker.stream) {
-      video.srcObject = tracker.stream;
-      video.play().catch(() => {});
-    }
-  }
-  const tr = tracker;
-
-  async function startCamera(mode: "track" | "lens") {
-    tr.setMode(mode);
-    try {
-      await tr.start();
-    } catch (e: any) {
-      toast(`Camera failed: ${e.message ?? e}`);
-    }
-    renderAll();
-  }
-
-  function stopCamera() {
-    tr.stop();
-    renderAll();
-  }
-
-  tr.onStatus = (s) => {
-    if (s) pill.textContent = s;
-  };
-
-  const markDone = (id: StepId) => {
+  const markDone = (id: string) => {
     done.add(id);
-    saveDone(done);
+    save("seefy.guide.done", [...done]);
     open = null;
     renderAll();
   };
 
-  // ---- steps ---------------------------------------------------------------
+  // ---- scan state (from the host) -------------------------------------------
 
-  const origin = () => conn.tagmap?.origin ?? 0;
-  const mappedCount = () => Object.keys(conn.tagmap?.tags ?? {}).length;
-
-  const steps: Step[] = [
-    {
-      id: "print",
-      title: "Print the tags",
-      render: (b) =>
-        b.append(
-          h("p", {}, "On your laptop, open the print page and print it at 100% (actual size)."),
-          h("p", { class: "link" }, h("a", { href: "/print.html", target: "_blank" }, `${location.host}/print.html`)),
-          h("p", { class: "muted" },
-            "You get: one big tag (tag 0) for the floor, smaller tags for the walls, and a grid of small tags for calibrating the camera."),
-          h("button", { class: "primary", onclick: () => markDone("print") }, "Done, they're printed"),
-        ),
-    },
-    {
-      id: "place",
-      title: "Place the tags",
-      render: (b) =>
-        b.append(
-          h("ul", {},
-            h("li", {}, h("b", {}, "Tag 0"), " flat on the floor, roughly in the middle of the room."),
-            h("li", {}, h("b", {}, "Tags 1–4"), " upright on different walls, about chest height."),
-            h("li", {}, "The ", h("b", {}, "grid"), " taped flat on a table or wall.")),
-          h("button", { class: "primary", onclick: () => markDone("place") }, "Done, they're placed"),
-        ),
-    },
-    {
-      id: "lens",
-      title: "Calibrate the camera",
-      render: (b) => {
-        const views = h("b", {}, String(lensViews));
-        const need = conn.config?.lens?.min_views ?? 12;
-        const bar = h("div", { class: "bar" }, h("div", { style: `width:${Math.min(100, (100 * lensViews) / need)}%` }));
-        if (conn.lens?.ok) {
-          b.append(
-            h("p", { class: "good" }, `Calibrated: field of view ${conn.lens.fov_h_deg}°, fit ${conn.lens.rms_px} px.`),
-            h("button", { class: "primary", onclick: () => { stopCamera(); markDone("lens"); } }, "Next"),
-          );
-          return;
-        }
-        b.append(h("p", {}, "Point the camera at the grid and move slowly: tilt it, go closer and further, cover every part of the screen."));
-        if (tr.running && tr.mode === "lens") {
-          b.append(camera, h("p", {}, "Views captured: ", views, ` of ${need}`), bar,
-            h("p", { class: "muted" }, "It calibrates by itself once there are enough."));
-        } else {
-          b.append(h("button", { class: "primary", onclick: () => startCamera("lens") }, "Start camera"));
-        }
-        b.append(h("button", { class: "link-btn", onclick: () => { stopCamera(); markDone("lens"); } },
-          "Skip (tracking works, just less accurately)"));
-      },
-    },
-    {
-      id: "map",
-      title: "Map the room",
-      render: (b) => {
-        const recording = conn.session?.kind === "map";
-        b.append(h("p", {},
-          `Stand back so tag ${origin()} on the floor and one wall tag are both on screen. Then turn slowly so each wall tag ` +
-          "appears together with a tag that's already green."));
-        if (tr.running && tr.mode === "track") {
-          b.append(camera, tagChips());
-          b.append(h("p", { class: "muted" }, `${mappedCount()} tag${mappedCount() === 1 ? "" : "s"} mapped` +
-            (recording ? " · recording this pass" : "")));
-          b.append(h("button", {
-            class: "primary",
-            disabled: mappedCount() < 2,
-            onclick: async () => {
-              if (conn.session) await conn.api("/api/session/stop", "POST").catch(() => {});
-              markDone("map");
-            },
-          }, mappedCount() < 2 ? "Map at least 2 tags to continue" : "Done mapping"));
-        } else {
-          b.append(h("button", {
-            class: "primary",
-            onclick: async () => {
-              if (!conn.session) await conn.api("/api/session/start", "POST", { kind: "map" }).catch(() => {});
-              startCamera("track");
-            },
-          }, "Start camera"));
-        }
-      },
-    },
-    {
-      id: "walk",
-      title: "Walk around",
-      render: (b) => {
-        const recording = conn.session?.kind === "walk";
-        b.append(
-          h("p", {}, "Hold the phone at chest height, camera facing forward, and walk around the room."),
-          h("p", {}, "On your laptop, open ", h("b", {}, "Live"), ": your path is drawn on the floor plan."),
-        );
-        if (!(tr.running && tr.mode === "track")) {
-          b.append(h("button", { class: "primary", onclick: () => startCamera("track") }, "Start camera"));
-          return;
-        }
-        const p = tr.last?.pose;
-        b.append(camera, h("p", { class: p?.ok ? "good" : "muted" },
-          p?.ok ? `You're at x ${fmt(p.p[0], 2)} m, y ${fmt(p.p[1], 2)} m` : "Looking for tags…"));
-        b.append(h("button", {
-          class: recording ? "primary danger" : "primary",
-          onclick: async () => {
-            await conn.api(recording ? "/api/session/stop" : "/api/session/start", "POST",
-              recording ? undefined : { kind: "walk" }).catch((e) => toast(e.message));
-          },
-        }, recording ? `Stop recording (${fmt(conn.session?.duration_s, 0)} s)` : "Record this walk"));
-        b.append(h("p", { class: "muted" },
-          "Recordings are kept for training WiFi sensing later. Each one adds to the last."));
-      },
-    },
-  ];
-
-  function tagChips(): HTMLElement {
-    const mapped = conn.tagmap?.tags ?? {};
-    const seenNow = new Set(tr.last?.dets.map((d) => d.id));
-    const roomMax = conn.config?.tracking?.room_tag_max_id ?? 49;
-    const ids = new Set<number>([
-      ...Object.keys(mapped).map(Number),
-      ...Object.keys(conn.tagmap?.observed ?? {}).map(Number),
-      ...[...seenNow].filter((id) => id <= roomMax),
-    ]);
-    return h("div", { class: "chips" },
-      ...[...ids].sort((a, b) => a - b).map((id) =>
-        h("span", { class: `chip ${mapped[id] ? "mapped" : ""} ${seenNow.has(id) ? "seen" : ""}` }, String(id))));
+  let scan: { id?: string; status?: string; stage?: string; progress?: number; [k: string]: any } = {};
+  async function refreshScan() {
+    try {
+      const list = await conn.api("/api/scans");
+      if (list.length && !scan.id) scan = { ...list[0] };
+      if (list.length && list[0].id === scan.id) scan = { ...scan, ...list[0] };
+      if (scan.status === "done" && scan.room_size_m === undefined) {
+        const { result } = await conn.api(`/api/scans/${scan.id}`);
+        if (result) scan = { ...scan, room_size_m: result.room_size_m, scale_method: result.scale_method };
+      }
+    } catch {
+      /* host restarting */
+    }
+    renderAll();
   }
 
-  // Automatic completion where the app can tell.
-  const autoDone = (id: StepId) => (id === "lens" && conn.lens?.ok && done.has("lens")) || done.has(id);
+  // ---- full-screen camera: markerless scan -----------------------------------
 
-  // ---- rendering -----------------------------------------------------------
-
-  let lensViews = 0;
-  const list = h("div", { class: "steps" });
-  const head = h("div", { class: "guide-head" });
-  const el = h("div", { class: "guide" }, head, list,
-    h("button", {
-      class: "link-btn",
-      onclick: () => {
-        if (!confirm("Start the guide again from step 1? Nothing you've recorded is deleted.")) return;
-        done.clear();
-        saveDone(done);
+  async function openScanCamera() {
+    const motionAllowed = requestMotionPermission(); // must start inside the tap on iOS
+    let stream: MediaStream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: false,
+        video: { facingMode: { ideal: "environment" }, width: { ideal: 1920 }, height: { ideal: 1080 } },
+      });
+    } catch (e: any) {
+      toast(`Camera unavailable: ${e.message ?? e}`);
+      return;
+    }
+    let wake: any = null;
+    try {
+      wake = await (navigator as any).wakeLock?.request("screen");
+    } catch {
+      /* fine without */
+    }
+    const rec = { r: null as ScanRecorder | null };
+    const finish = () => {
+      stream.getTracks().forEach((t) => t.stop());
+      wake?.release?.();
+    };
+    const sheet: CameraSheet = openCameraSheet({
+      shutterLabel: "Start scan",
+      onShutter: async () => {
+        if (!rec.r) {
+          rec.r = new ScanRecorder(sheet.video);
+          rec.r.onStats = (s) => coach(sheet, s);
+          sheet.setShutter("recording");
+          await rec.r.start();
+          if (!(await motionAllowed)) toast("Motion sensors are off, so scale will be estimated less accurately.");
+        } else {
+          sheet.setShutter("busy");
+          sheet.setHint("Finishing upload…");
+          try {
+            await rec.r.stop();
+            scan = { id: rec.r.id, status: "queued" };
+          } catch (e: any) {
+            toast(e.message);
+          }
+          finish();
+          sheet.close();
+          renderAll();
+        }
+      },
+      onClose: () => {
+        if (rec.r?.running) {
+          rec.r.stop().catch(() => {});
+          scan = { id: rec.r.id, status: "queued" };
+        }
+        finish();
         renderAll();
       },
-    }, "Start the guide again"));
-
-  function renderAll() {
-    const current = open ?? steps.find((s) => !autoDone(s.id))?.id ?? null;
-    const n = steps.filter((s) => autoDone(s.id)).length;
-    head.replaceChildren(
-      h("h2", {}, current ? `Step ${steps.findIndex((s) => s.id === current) + 1} of ${steps.length}` : "All set"),
-      h("div", { class: "bar" }, h("div", { style: `width:${(100 * n) / steps.length}%` })),
-    );
-    list.replaceChildren(
-      ...steps.map((s, i) => {
-        const isDone = autoDone(s.id);
-        const isOpen = s.id === current;
-        const card = h("section", { class: `step ${isDone ? "done" : ""} ${isOpen ? "open" : ""}` },
-          h("button", {
-            class: "step-title",
-            onclick: () => {
-              open = isOpen ? null : s.id;
-              renderAll();
-            },
-          }, h("span", { class: "num" }, isDone ? "✓" : String(i + 1)), s.title));
-        if (isOpen) {
-          const body = h("div", { class: "step-body" });
-          s.render(body);
-          card.append(body);
-        }
-        return card;
-      }),
-    );
+    });
+    sheet.video.srcObject = stream;
+    sheet.video.play().catch(() => {});
+    sheet.setStatus("Ready");
+    sheet.setHint("Hold the phone upright at chest height. Tap the button and walk slowly around the room.");
   }
 
-  function drawOverlay(r: FrameResult) {
-    const { w, h: hh } = tr.size;
-    if (overlay.width !== w || overlay.height !== hh) {
-      overlay.width = w;
-      overlay.height = hh;
+  function coach(sheet: CameraSheet, s: { seconds: number; frames: number; dropped: number; turnRate: number; brightness: number; motion: boolean }) {
+    const m = Math.floor(s.seconds / 60);
+    const sec = Math.floor(s.seconds % 60).toString().padStart(2, "0");
+    sheet.setStatus(`● ${m}:${sec} · ${s.frames} frames`, "rec");
+    if (s.brightness < 35) sheet.setHint("Too dark: turn on the lights.");
+    else if (s.turnRate > 110) sheet.setHint("Turn slower.");
+    else if (s.seconds < 15) sheet.setHint("Walk slowly. Point at each corner, the door and the windows.");
+    else if (s.seconds < 30) sheet.setHint("Tilt up at the ceiling lights now and then.");
+    else if (s.seconds < 45) sheet.setHint("Keep going until you've seen the whole room.");
+    else sheet.setHint("Covered the room? Tap the button to finish.");
+  }
+
+  // ---- full-screen camera: tags ----------------------------------------------
+
+  async function openTagCamera(trackMode: "track" | "lens", sessionKind?: "map" | "walk") {
+    if (!tracker) tracker = new Tracker(document.createElement("video"));
+    const tr = tracker;
+    const sheet = openCameraSheet({
+      onClose: async () => {
+        tr.stop();
+        tr.onResult = () => {};
+        if (conn.session) await conn.api("/api/session/stop", "POST").catch(() => {});
+        renderAll();
+      },
+    });
+    tr.video = sheet.video;
+    tr.setMode(trackMode);
+    tr.onStatus = (s) => s && sheet.setStatus(s);
+    tr.onResult = (r) => drawTags(sheet, r, tr);
+    if (sessionKind && !conn.session) await conn.api("/api/session/start", "POST", { kind: sessionKind }).catch(() => {});
+    try {
+      await tr.start();
+    } catch (e: any) {
+      toast(`Camera failed: ${e.message ?? e}`);
+      sheet.close();
+      return;
     }
-    const g = overlay.getContext("2d")!;
+    sheet.setHint(trackMode === "lens"
+      ? "Point at the grid and move slowly: tilt, closer, further, every part of the screen."
+      : "Keep a green tag in view. Turn slowly so each new tag appears next to a green one.");
+  }
+
+  let lensViews = 0;
+  function drawTags(sheet: CameraSheet, r: FrameResult, tr: Tracker) {
+    const { w, h: hh } = tr.size;
+    const c = sheet.overlay;
+    if (c.width !== w || c.height !== hh) {
+      c.width = w;
+      c.height = hh;
+    }
+    const g = c.getContext("2d")!;
     g.clearRect(0, 0, w, hh);
     const mapped = conn.tagmap?.tags ?? {};
     const roomMax = conn.config?.tracking?.room_tag_max_id ?? 49;
-    g.lineWidth = Math.max(3, w / 250);
-    g.font = `700 ${Math.round(w / 30)}px system-ui`;
+    g.lineWidth = Math.max(3, w / 220);
+    g.font = `700 ${Math.round(w / 26)}px system-ui`;
     for (const d of r.dets) {
-      const color = d.id > roomMax ? "#4c8dff" : mapped[d.id] ? "#22c55e" : "#f5a524";
+      const color = d.id > roomMax ? "#4c8dff" : mapped[d.id] ? "#30d158" : "#ff9f0a";
       g.strokeStyle = color;
       g.fillStyle = color;
       g.beginPath();
@@ -280,58 +197,210 @@ export function guideScreen(): { el: HTMLElement; destroy: () => void } {
       for (let i = 2; i < 8; i += 2) g.lineTo(d.c[i], d.c[i + 1]);
       g.closePath();
       g.stroke();
-      if (d.id <= roomMax) g.fillText(String(d.id), d.c[0], d.c[1] - 8);
+      if (d.id <= roomMax) g.fillText(String(d.id), d.c[0], d.c[1] - 10);
     }
     if (tr.mode === "lens") {
-      const n = r.dets.filter((d) => d.id > roomMax).length;
-      pill.textContent = n ? `${n} grid tags in view` : "Point at the grid";
-      pill.className = `pill ${n >= (conn.config?.lens?.min_tags_per_view ?? 8) ? "ok" : "warn"}`;
+      const need = conn.config?.lens?.min_views ?? 12;
+      sheet.setStatus(conn.lens?.ok ? "Calibrated ✓" : `${lensViews} of ${need} views`, conn.lens?.ok ? "ok" : "");
     } else {
-      const p = r.pose;
-      pill.textContent = p?.ok ? "Tracking" : r.dets.length ? "Tags seen, keep a green one in view" : "No tags in view";
-      pill.className = `pill ${p?.ok ? "ok" : "warn"}`;
+      const n = Object.keys(mapped).length;
+      sheet.setStatus(r.pose?.ok ? `Tracking · ${n} tags mapped` : `${n} tags mapped`, r.pose?.ok ? "ok" : "warn");
     }
   }
 
-  // Re-render the open step at most a few times a second while the camera runs.
-  let lastRender = 0;
-  tr.onResult = (r) => {
-    drawOverlay(r);
-    const now = performance.now();
-    if (now - lastRender > 400) {
-      lastRender = now;
-      renderAll();
-    }
-  };
+  // ---- steps -----------------------------------------------------------------
 
-  let calibrating = false;
+  const scanSteps: Step[] = [
+    ...(isTouch ? [] : [{
+      id: "phone",
+      title: "Open Seefy on your phone",
+      isDone: () => done.has("phone"),
+      render: (b: HTMLElement) => b.append(
+        h("p", {}, "Scanning uses your phone's camera. Scan this code with the phone (same WiFi), then continue there."),
+        h("img", { src: "/api/qr.svg", width: 160, height: 160, class: "qr", alt: "QR code to open Seefy" }),
+        h("button", { class: "primary", onclick: () => markDone("phone") }, "Continue"),
+      ),
+    }]),
+    {
+      id: "scan",
+      title: "Scan the room",
+      isDone: () => !!scan.id,
+      render: (b) => b.append(
+        h("p", {}, "Walk slowly around the room with the camera, like filming a video. The room's corners, door, windows " +
+          "and ceiling lights become its reference points. No markers needed."),
+        h("ul", { class: "tips" },
+          h("li", {}, "Lights on, phone upright at chest height"),
+          h("li", {}, "About 30–60 seconds"),
+          h("li", {}, "Get every corner, the door and the ceiling lights")),
+        h("button", { class: "primary", onclick: openScanCamera }, "Open camera"),
+      ),
+    },
+    {
+      id: "build",
+      title: "Build the map",
+      isDone: () => scan.status === "done",
+      render: (b) => {
+        if (!scan.id) {
+          b.append(h("p", { class: "muted" }, "Scan the room first."));
+          return;
+        }
+        if (scan.status === "failed") {
+          b.append(h("p", { class: "bad" }, scan.error || "The map couldn't be built."),
+            h("button", { class: "primary", onclick: openScanCamera }, "Scan again"));
+          return;
+        }
+        const stages: Record<string, string> = {
+          features: "Finding corners, edges and lights",
+          matching: "Matching frames",
+          mapping: "Placing the camera in 3D",
+          aligning: "Finding the floor and the scale",
+        };
+        b.append(
+          h("p", {}, scan.status === "queued" ? "Waiting to start…" : stages[scan.stage ?? ""] ?? "Working…"),
+          h("div", { class: "bar" }, h("div", { style: `width:${Math.round(100 * (scan.progress ?? 0.02))}%` })),
+          h("p", { class: "muted" }, "This runs on your laptop and usually takes a few minutes."),
+        );
+      },
+    },
+    {
+      id: "view",
+      title: "See it on Live",
+      isDone: () => done.has(`view-${scan.id}`),
+      render: (b) => {
+        const size = scan.room_size_m ? `about ${fmt(scan.room_size_m[0], 1)} × ${fmt(scan.room_size_m[1], 1)} m` : "";
+        b.append(
+          h("p", { class: "good" }, `Mapped ${scan.registered ?? "?"} of ${scan.total ?? "?"} frames${size ? ` · ${size}` : ""}`),
+          h("p", { class: "muted" }, `Scale: ${scan.scale_method ?? "–"}`),
+          h("p", {}, "Open ", h("a", { href: "#live" }, "Live"),
+            " (on your laptop is best). The room appears as dots from above, with the path you walked."),
+          h("button", { class: "primary", onclick: () => markDone(`view-${scan.id}`) }, "Looks right"),
+          h("button", { class: "link-btn", onclick: openScanCamera }, "Scan again"),
+        );
+      },
+    },
+  ];
+
+  const mappedCount = () => Object.keys(conn.tagmap?.tags ?? {}).length;
+  const tagSteps: Step[] = [
+    {
+      id: "t-show",
+      title: "Put up the tags",
+      isDone: () => done.has("t-show"),
+      render: (b) => b.append(
+        h("p", {}, "Print them, or show them on screens you already have (monitor, laptop, tablet, old phone)."),
+        h("p", {}, h("a", { href: "/print.html", target: "_blank" }, "Open the tags page")),
+        h("ul", { class: "tips" },
+          h("li", {}, h("b", {}, "Tag 0"), " is the starting point. Lay a printed one flat on the floor, or show it on a monitor."),
+          h("li", {}, "Spread 2–4 more around the room, each visible from where another one is.")),
+        h("button", { class: "primary", onclick: () => markDone("t-show") }, "Done"),
+      ),
+    },
+    {
+      id: "t-lens",
+      title: "Calibrate the camera (optional)",
+      isDone: () => !!conn.lens?.ok || done.has("t-lens"),
+      render: (b) => b.append(
+        h("p", {}, "Point the camera at the grid of small tags and move it around. It calibrates itself."),
+        h("button", { class: "primary", onclick: () => openTagCamera("lens") }, "Open camera"),
+        h("button", { class: "link-btn", onclick: () => markDone("t-lens") }, "Skip"),
+      ),
+    },
+    {
+      id: "t-map",
+      title: "Map the tags",
+      isDone: () => mappedCount() >= 2 && done.has("t-map"),
+      render: (b) => b.append(
+        h("p", {}, "Start with tag 0 in view, then turn slowly so each tag appears next to one that's already green."),
+        h("p", { class: "muted" }, `${mappedCount()} tags mapped so far`),
+        h("button", { class: "primary", onclick: () => openTagCamera("track", "map") }, "Open camera"),
+        mappedCount() >= 2 ? h("button", { class: "link-btn", onclick: () => markDone("t-map") }, "Done mapping") : "",
+      ),
+    },
+    {
+      id: "t-walk",
+      title: "Walk around",
+      isDone: () => done.has("t-walk"),
+      render: (b) => b.append(
+        h("p", {}, "Walk around with the camera facing forward. Your path appears on Live."),
+        h("button", { class: "primary", onclick: () => openTagCamera("track", "walk") }, "Open camera"),
+        h("button", { class: "link-btn", onclick: () => markDone("t-walk") }, "Done"),
+      ),
+    },
+  ];
+
+  // ---- rendering ---------------------------------------------------------------
+
+  const list = h("div", { class: "steps" });
+  const head = h("div", { class: "guide-head" });
+  const foot = h("div", { class: "guide-foot" });
+  const el = h("div", { class: "guide" }, head, list, foot);
+
+  function renderAll() {
+    const steps = mode === "scan" ? scanSteps : tagSteps;
+    const current = open ?? steps.find((s) => !s.isDone())?.id ?? null;
+    const n = steps.filter((s) => s.isDone()).length;
+    head.replaceChildren(
+      h("h2", {}, current ? `Step ${steps.findIndex((s) => s.id === current) + 1} of ${steps.length}` : "All set"),
+      h("div", { class: "bar" }, h("div", { style: `width:${(100 * n) / steps.length}%` })),
+    );
+    list.replaceChildren(...steps.map((s, i) => {
+      const isDone = s.isDone();
+      const isOpen = s.id === current;
+      const card = h("section", { class: `step ${isDone ? "done" : ""} ${isOpen ? "open" : ""}` },
+        h("button", {
+          class: "step-title",
+          onclick: () => {
+            open = isOpen ? null : s.id;
+            renderAll();
+          },
+        }, h("span", { class: "num" }, isDone ? "✓" : String(i + 1)), s.title));
+      if (isOpen) {
+        const body = h("div", { class: "step-body" });
+        s.render(body);
+        card.append(body);
+      }
+      return card;
+    }));
+    foot.replaceChildren(
+      h("button", {
+        class: "link-btn",
+        onclick: () => {
+          mode = mode === "scan" ? "tags" : "scan";
+          save("seefy.guide.mode", mode);
+          open = null;
+          renderAll();
+        },
+      }, mode === "scan" ? "Use tags instead (printed or on a screen)" : "Back to scanning without tags"),
+      h("button", {
+        class: "link-btn subtle",
+        onclick: () => {
+          if (!confirm("Start the guide again? Nothing you've recorded is deleted.")) return;
+          done.clear();
+          save("seefy.guide.done", []);
+          scan = {};
+          open = null;
+          renderAll();
+        },
+      }, "Start the guide again"),
+    );
+  }
+
   offs.push(
+    conn.on("scan", (m) => {
+      if (!scan.id || m.id === scan.id || m.status === "recording") scan = { ...(m.id === scan.id ? scan : {}), ...m };
+      renderAll();
+    }),
     conn.on("lens_view", async (m) => {
       if (!m.accepted) return;
       lensViews = m.views;
-      const need = conn.config?.lens?.min_views ?? 12;
-      if (lensViews >= need && !calibrating && !conn.lens?.ok) {
-        calibrating = true;
-        try {
-          const r = await conn.api(`/api/lens/${conn.id}/calibrate`, "POST");
-          if (r.ok) conn.lens = r;
-        } finally {
-          calibrating = false;
-        }
-        renderAll();
+      if (lensViews >= (conn.config?.lens?.min_views ?? 12) && !conn.lens?.ok) {
+        const r = await conn.api(`/api/lens/${conn.id}/calibrate`, "POST").catch(() => null);
+        if (r?.ok) conn.lens = r;
       }
     }),
-    conn.on("lens", renderAll),
     conn.on("tagmap", renderAll),
-    conn.on("session", renderAll),
   );
-
+  refreshScan();
   renderAll();
-  return {
-    el,
-    destroy: () => {
-      offs.forEach((off) => off());
-      tr.onResult = () => {};
-    },
-  };
+  return { el, destroy: () => offs.forEach((off) => off()) };
 }

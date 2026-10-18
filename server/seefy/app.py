@@ -14,7 +14,7 @@ from fastapi import Body, FastAPI, HTTPException, Request, WebSocket
 from fastapi.responses import HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from .config import Config
+from .config import DOCS, Config
 from .hub import Hub
 from .lens import LensStore
 from .metrics import MetricsLog
@@ -55,21 +55,21 @@ def create_app(data: Path, public_url: str = "") -> FastAPI:
 
     @app.get("/api/config")
     def get_config():
-        return {"values": cfg.values, "overrides": cfg.overrides}
+        return {"values": cfg.values, "overrides": cfg.overrides, "docs": DOCS}
 
     @app.put("/api/config")
     async def put_config(changes: dict = Body(...)):
         cfg.update(changes)
         metrics.event("config_change", changes=changes)
         await hub.broadcast_config()
-        return {"values": cfg.values, "overrides": cfg.overrides}
+        return {"values": cfg.values, "overrides": cfg.overrides, "docs": DOCS}
 
     @app.post("/api/config/reset")
     async def reset_config():
         cfg.reset()
         metrics.event("config_change", changes="reset to defaults")
         await hub.broadcast_config()
-        return {"values": cfg.values, "overrides": cfg.overrides}
+        return {"values": cfg.values, "overrides": cfg.overrides, "docs": DOCS}
 
     @app.get("/api/tagmap")
     def get_tagmap():

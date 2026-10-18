@@ -20,6 +20,7 @@ function css(name: string): string {
 export class MapView {
   canvas: HTMLCanvasElement;
   tagmap: any = null;
+  scan: { points: number[][]; frames: { p: number[] }[] } | null = null;
   phones = new Map<string, PhoneTrack>();
   private ctx: CanvasRenderingContext2D;
   private raf = 0;
@@ -38,6 +39,11 @@ export class MapView {
 
   destroy(): void {
     cancelAnimationFrame(this.raf);
+  }
+
+  setScan(result: any): void {
+    this.scan = result?.points?.length ? result : null;
+    this.dirty = true;
   }
 
   setTagmap(tm: any): void {
@@ -69,6 +75,18 @@ export class MapView {
       for (let i = 0; i < 12; i += 3) {
         xs.push(t.corners[i]);
         ys.push(t.corners[i + 1]);
+      }
+    }
+    if (this.scan) {
+      // Robust extent: ignore the outermost 2% of points.
+      const px = this.scan.points.map((q) => q[0]).sort((a, b) => a - b);
+      const py = this.scan.points.map((q) => q[1]).sort((a, b) => a - b);
+      const k = Math.floor(px.length * 0.02);
+      xs.push(px[k], px[px.length - 1 - k]);
+      ys.push(py[k], py[py.length - 1 - k]);
+      for (const f of this.scan.frames) {
+        xs.push(f.p[0]);
+        ys.push(f.p[1]);
       }
     }
     for (const ph of this.phones.values()) {
@@ -134,6 +152,29 @@ export class MapView {
     g.beginPath(); g.moveTo(X(0), Y(0)); g.lineTo(X(0.5), Y(0)); g.stroke();
     g.strokeStyle = css("--axis-y");
     g.beginPath(); g.moveTo(X(0), Y(0)); g.lineTo(X(0), Y(0.5)); g.stroke();
+
+    // Scanned room: points between knee and head height outline walls and furniture from above.
+    if (this.scan) {
+      g.fillStyle = css("--scan-point");
+      for (const q of this.scan.points) {
+        if (q[2] < 0.15 || q[2] > 2.3) continue;
+        g.fillRect(X(q[0]) - 1, Y(q[1]) - 1, 2, 2);
+      }
+      g.strokeStyle = css("--scan-path");
+      g.lineWidth = 2;
+      g.setLineDash([6, 5]);
+      g.beginPath();
+      this.scan.frames.forEach((f, i) => (i ? g.lineTo(X(f.p[0]), Y(f.p[1])) : g.moveTo(X(f.p[0]), Y(f.p[1]))));
+      g.stroke();
+      g.setLineDash([]);
+      const f0 = this.scan.frames[0];
+      if (f0) {
+        g.fillStyle = css("--scan-path");
+        g.beginPath();
+        g.arc(X(f0.p[0]), Y(f0.p[1]), 5, 0, Math.PI * 2);
+        g.fill();
+      }
+    }
 
     // Tags: floor tags appear as squares, wall tags as short lines.
     for (const [id, t] of Object.entries<any>(this.tagmap?.tags ?? {})) {
