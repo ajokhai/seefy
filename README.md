@@ -24,11 +24,10 @@ Open the URL on your phone (same WiFi). The first time, accept the certificate w
 |---|---|
 | `server/seefy/` | Host service (Python): HTTPS, WebSocket hub, clock sync, tag map, lens calibration, session recorder, signal capture |
 | `web/` | Browser app (TypeScript + Vite): Live, Learn and Sensors screens |
-| `legacy/` | The original DensePose-from-WiFi experiments |
-| `docs/` | Plan, fidelity notes, the DensePose From WiFi paper |
+| `docs/` | Plan and fidelity notes |
 
 ## Background
 
-This started as an attempt to reproduce [*DensePose From WiFi*](docs/papers/densepose-from-wifi.pdf) (Geng, Huang, De la Torre, 2022). That paper maps WiFi signal measurements to dense human pose using a camera-supervised network. That work needed specialised WiFi cards. Seefy keeps the camera-as-teacher idea but aims at the stock hardware in any home.
+This started as an attempt to reproduce [*DensePose From WiFi*](https://arxiv.org/abs/2301.00250) (Geng, Huang, De la Torre, 2022). That paper maps WiFi signal measurements to dense human pose using a camera-supervised network. That work needed specialised WiFi cards. Seefy keeps the camera-as-teacher idea but aims at the stock hardware in any home. The repo began as Paul Wilson's experiments toward that paper (July 2023); they remain in the git history.
 
 ![WiFi DensePose](docs/img/wifi-densepose.png)
