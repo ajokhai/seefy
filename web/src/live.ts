@@ -2,19 +2,43 @@
 
 import { conn } from "./conn";
 import { MapView } from "./mapview";
+import { View3D } from "./view3d";
 import { fmt, h } from "./ui";
 
 export function liveScreen(): { el: HTMLElement; destroy: () => void } {
   const canvas = h("canvas", { class: "map" });
+  const box3d = h("div", { class: "map map3d", hidden: true });
   const side = h("div", { class: "side" });
-  const el = h("div", { class: "live" }, canvas, side);
+  const btnPlan = h("button", { class: "seg on" }, "Blueprint");
+  const btn3d = h("button", { class: "seg" }, "3D");
+  const stage = h("div", { class: "stage" }, h("div", { class: "segs floating" }, btnPlan, btn3d), canvas, box3d);
+  const el = h("div", { class: "live" }, stage, side);
   const view = new MapView(canvas);
+  let view3d: View3D | null = null;
+  const setMode = (m: "plan" | "3d") => {
+    btnPlan.classList.toggle("on", m === "plan");
+    btn3d.classList.toggle("on", m === "3d");
+    canvas.hidden = m !== "plan";
+    box3d.hidden = m !== "3d";
+    if (m === "3d" && !view3d) {
+      view3d = new View3D(box3d);
+      view3d.setScan(scanInfo);
+    }
+    try {
+      localStorage.setItem("seefy.live.view", m);
+    } catch {
+      /* fine */
+    }
+  };
+  btnPlan.onclick = () => setMode("plan");
+  btn3d.onclick = () => setMode("3d");
   view.setTagmap(conn.tagmap);
   let scanInfo: any = null;
   const loadScan = async () => {
     try {
       scanInfo = await conn.api("/api/scans/latest");
       view.setScan(scanInfo);
+      view3d?.setScan(scanInfo);
       renderSide();
     } catch {
       /* no scan yet */
@@ -56,7 +80,10 @@ export function liveScreen(): { el: HTMLElement; destroy: () => void } {
   }
 
   const offs = [
-    conn.on("pose", (m) => view.addPose(m.device, String(names().get(m.device) ?? "phone"), m)),
+    conn.on("pose", (m) => {
+      view.addPose(m.device, String(names().get(m.device) ?? "phone"), m);
+      view3d?.setPerson(m.device, m.body[0], m.body[1]);
+    }),
     conn.on("tagmap", (m) => view.setTagmap(m.tagmap)),
     conn.on("welcome", (m) => view.setTagmap(m.tagmap)),
     conn.on("state", renderSide),
@@ -66,12 +93,20 @@ export function liveScreen(): { el: HTMLElement; destroy: () => void } {
   ];
   renderSide();
   loadScan();
+  let saved = "plan";
+  try {
+    saved = localStorage.getItem("seefy.live.view") ?? "plan";
+  } catch {
+    /* fine */
+  }
+  setMode(saved === "3d" ? "3d" : "plan");
 
   return {
     el,
     destroy: () => {
       offs.forEach((off) => off());
       view.destroy();
+      view3d?.destroy();
     },
   };
 }

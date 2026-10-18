@@ -60,6 +60,7 @@ class Device:
     ip: str
     ua: str
     ws: WebSocket
+    tab: str = ""  # one phone can have several tabs open; each is its own connection
     connected_at: float = field(default_factory=time.time)
     mac: str | None = None
     mode: str = "idle"
@@ -78,7 +79,7 @@ class Device:
             return None if v is None else round(v, 1)
 
         return {
-            "id": self.id, "name": self.name, "role": self.role, "ip": self.ip, "mac": self.mac,
+            "id": self.id, "tab": self.tab, "name": self.name, "role": self.role, "ip": self.ip, "mac": self.mac,
             "mode": self.mode, "status": self.status, "sync": self.sync,
             "capture_latency_ms": r(self.capture_latency_ms), "net_latency_ms": r(self.net_latency_ms),
             "rates": {k: round(m.rate(), 1) for k, m in self.rates.items()},
@@ -113,9 +114,11 @@ class Hub:
         dev = Device(
             id=q.get("device", "")[:64] or f"anon-{id(ws)}", name=q.get("name", "")[:40] or "device",
             role=q.get("role", "viewer"), ip=ip, ua=ws.headers.get("user-agent", "")[:200], ws=ws,
+            tab=q.get("tab", "")[:32],
         )
-        old = self.devices.get(dev.id)
-        if old:  # same device reconnected (page reload); drop the stale socket
+        key = f"{dev.id}:{dev.tab}"
+        old = self.devices.get(key)
+        if old:  # same tab reconnected (page reload); drop the stale socket
             try:
                 await old.ws.close()
             except Exception:
@@ -126,7 +129,7 @@ class Hub:
             "type": "welcome", "device": dev.id, "host": host_ms(), "config": self.cfg.values,
             "tagmap": self.tagmap.to_json(), "lens": self.lens.get(dev.id), "session": self._session(),
         })
-        self.devices[dev.id] = dev  # only now does it receive broadcasts, so "welcome" always comes first
+        self.devices[key] = dev  # only now does it receive broadcasts, so "welcome" always comes first
         self.metrics.event("connect", device=dev.id, name=dev.name, role=dev.role, ip=ip, ua=dev.ua)
         try:
             while True:
@@ -135,8 +138,8 @@ class Hub:
         except Exception:
             pass
         finally:
-            if self.devices.get(dev.id) is dev:
-                del self.devices[dev.id]
+            if self.devices.get(key) is dev:
+                del self.devices[key]
                 self.metrics.event("disconnect", device=dev.id, connected_s=round(time.time() - dev.connected_at))
 
     # -- messages -----------------------------------------------------------
@@ -280,8 +283,7 @@ class Hub:
         await self._broadcast({"type": "tagmap", "tagmap": self.tagmap.to_json()})
 
     async def send_lens(self, device: str) -> None:
-        dev = self.devices.get(device)
-        if dev:
+        for dev in [d for d in self.devices.values() if d.id == device]:
             await self._send(dev, {"type": "lens", "lens": self.lens.get(device)})
 
 

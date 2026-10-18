@@ -13,8 +13,24 @@ export interface PhoneTrack {
 
 const TRAIL_MS = 60_000;
 
+// Blueprint palette: white linework on deep blue, the same in light and dark mode.
+const BLUEPRINT: Record<string, string> = {
+  "--bg": "#14396b",
+  "--grid-faint": "rgba(255, 255, 255, 0.06)",
+  "--grid": "rgba(255, 255, 255, 0.15)",
+  "--axis-x": "#ff6961",
+  "--axis-y": "#7ee787",
+  "--scan-point": "rgba(255, 255, 255, 0.5)",
+  "--scan-path": "#64d2ff",
+  "--tag": "#ffffff",
+  "--tag-fill": "rgba(255, 255, 255, 0.15)",
+  "--fg": "#ffffff",
+  "--muted": "rgba(255, 255, 255, 0.55)",
+  "--accent": "#ff375f",
+};
+
 function css(name: string): string {
-  return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  return BLUEPRINT[name] ?? getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 }
 
 export class MapView {
@@ -118,7 +134,8 @@ export class MapView {
     }
     const g = this.ctx;
     g.setTransform(dpr, 0, 0, dpr, 0, 0);
-    g.clearRect(0, 0, W, H);
+    g.fillStyle = css("--bg");
+    g.fillRect(0, 0, W, H);
 
     const [x0, x1, y0, y1] = this.bounds();
     const s = Math.min(W / (x1 - x0), H / (y1 - y0));
@@ -144,7 +161,8 @@ export class MapView {
     }
     g.fillStyle = css("--muted");
     g.font = "11px system-ui";
-    g.fillText("1 m grid", 8, H - 8);
+    g.font = "600 11px system-ui";
+    g.fillText("BLUEPRINT · 1 m GRID", 10, H - 10);
 
     // Origin axes.
     g.lineWidth = 2;
@@ -158,7 +176,7 @@ export class MapView {
       g.fillStyle = css("--scan-point");
       for (const q of this.scan.points) {
         if (q[2] < 0.15 || q[2] > 2.3) continue;
-        g.fillRect(X(q[0]) - 1, Y(q[1]) - 1, 2, 2);
+        g.fillRect(X(q[0]) - 0.75, Y(q[1]) - 0.75, 1.5, 1.5);
       }
       g.strokeStyle = css("--scan-path");
       g.lineWidth = 2;

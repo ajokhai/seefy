@@ -264,11 +264,23 @@ input[type="checkbox"] { min-height: 0; width: 22px; height: 22px; accent-color:
 /* ---- live ---------------------------------------------------------------- */
 
 .live { display: grid; grid-template-columns: 1fr 300px; gap: 16px; height: calc(100vh - 200px); min-height: 420px; }
-.map { width: 100%; height: 100%; background: var(--card); border-radius: var(--radius); }
+.stage { position: relative; min-height: 0; }
+.map { width: 100%; height: 100%; background: #14396b; border-radius: var(--radius); display: block; }
+.map[hidden] { display: none; }
+.map3d { overflow: hidden; background: var(--card); }
+.map3d canvas { width: 100% !important; height: 100% !important; display: block; touch-action: none; }
+.segs.floating {
+  position: absolute; top: 12px; left: 50%; transform: translateX(-50%); z-index: 2; margin: 0;
+  background: rgba(118, 118, 128, 0.24); padding: 2px; border-radius: 9px;
+  -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px);
+}
+.segs.floating .seg { min-height: 30px; padding: 0 16px; border-radius: 7px; background: transparent; color: #fff; font-size: 13px; }
+.segs.floating .seg.on { background: #fff; color: #000; box-shadow: 0 1px 3px rgba(0,0,0,0.2); }
+.segs { display: flex; }
 .side { overflow: auto; }
 .rec { color: var(--danger); font-weight: 600; }
 @media (max-width: 760px) {
-  .live { grid-template-columns: 1fr; grid-template-rows: 55vh auto; height: auto; }
+  .live { grid-template-columns: 1fr; grid-template-rows: 60vh auto; height: auto; }
 }
 
 /* ---- details ------------------------------------------------------------- */

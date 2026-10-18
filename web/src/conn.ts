@@ -38,11 +38,27 @@ function deviceName(): string {
   return "Browser";
 }
 
+// Each tab gets its own id (kept across reloads of that tab), so two open tabs don't
+// replace each other's connection.
+function tabId(): string {
+  try {
+    let id = sessionStorage.getItem("seefy.tab");
+    if (!id) {
+      id = Math.random().toString(36).slice(2, 8);
+      sessionStorage.setItem("seefy.tab", id);
+    }
+    return id;
+  } catch {
+    return Math.random().toString(36).slice(2, 8);
+  }
+}
+
 export const isTouch = matchMedia("(pointer: coarse)").matches;
 
 export class Conn {
   readonly id = deviceId();
   readonly name = deviceName();
+  readonly tab = tabId();
   ws: WebSocket | null = null;
   connected = false;
 
@@ -60,7 +76,7 @@ export class Conn {
   private syncTimer = 0;
 
   connect(): void {
-    const q = new URLSearchParams({ role: isTouch ? "phone" : "viewer", device: this.id, name: this.name });
+    const q = new URLSearchParams({ role: isTouch ? "phone" : "viewer", device: this.id, name: this.name, tab: this.tab });
     const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws?${q}`);
     this.ws = ws;
     ws.onopen = () => {
