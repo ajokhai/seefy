@@ -300,6 +300,32 @@ input[type="checkbox"] { min-height: 0; width: 22px; height: 22px; accent-color:
 .device-row > div:nth-child(2) { flex: 1; min-width: 0; }
 .device-row .muted { font-size: 13px; }
 .device-metrics { text-align: right; font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+/* Scan progress: the bar fills toward 100% = extra sure; the marker shows where "enough" is. */
+.scan-card .side-head h3 { color: var(--fg); text-transform: none; font-size: 15px; font-weight: 600; }
+.scan-level { font-size: 12px; font-weight: 600; padding: 3px 9px; border-radius: 10px; white-space: nowrap; }
+.scan-level.short { color: var(--warn); background: color-mix(in srgb, var(--warn) 16%, transparent); }
+.scan-level.enough, .scan-level.extra { color: var(--ok); background: color-mix(in srgb, var(--ok) 16%, transparent); }
+.scan-bar { position: relative; height: 10px; border-radius: 5px; background: var(--fill); margin: 6px 0 10px; }
+.scan-bar .fill { height: 100%; border-radius: 5px; background: var(--warn); transition: width 0.4s ease, background 0.3s; }
+.scan-card:has(.scan-level.enough) .scan-bar .fill, .scan-card:has(.scan-level.extra) .scan-bar .fill { background: var(--ok); }
+.scan-bar .enough-marker {
+  position: absolute; top: -3px; bottom: -3px; width: 2px; margin-left: -1px; border-radius: 1px; background: var(--fg); opacity: 0.55;
+}
+.scan-bar .enough-marker::after {
+  content: "enough"; position: absolute; top: 15px; left: 50%; transform: translateX(-50%);
+  font-size: 10px; color: var(--muted); white-space: nowrap;
+}
+.scan-card > p { margin: 14px 0 0; font-size: 13px; }
+.scan-components { display: grid; grid-template-columns: auto 1fr; gap: 6px 10px; margin: 12px 0 0; font-size: 12px; align-items: center; }
+.scan-components dt { color: var(--muted); }
+.scan-components dd { margin: 0; color: var(--muted); display: flex; align-items: center; gap: 6px; min-width: 0; }
+.comp-bar { flex: none; width: 56px; height: 5px; border-radius: 3px; background: var(--fill); overflow: hidden; }
+.comp-bar > span { display: block; height: 100%; background: var(--accent); border-radius: 3px; }
+.scan-hint {
+  margin: 12px 0 0 !important; padding: 10px 12px; border-radius: 10px; font-size: 14px !important; font-weight: 600;
+  color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
 .rec { color: var(--danger); font-weight: 600; }
 @media (max-width: 760px) {
   .live { grid-template-columns: minmax(0, 1fr); grid-template-rows: 60vh auto; height: auto; }
