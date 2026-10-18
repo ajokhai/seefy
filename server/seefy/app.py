@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
 import io
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 import qrcode
 import qrcode.image.svg
-from fastapi import Body, FastAPI, HTTPException, WebSocket
+from fastapi import Body, FastAPI, HTTPException, Request, WebSocket
 from fastapi.responses import HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 
@@ -17,6 +19,7 @@ from .hub import Hub
 from .lens import LensStore
 from .metrics import MetricsLog
 from .recorder import Recorder
+from .scan import ScanStore
 from .tagmap import TagMap
 
 WEB_DIST = Path(__file__).resolve().parents[2] / "web" / "dist"
@@ -29,6 +32,9 @@ def create_app(data: Path, public_url: str = "") -> FastAPI:
     recorder = Recorder(data / "sessions")
     metrics = MetricsLog(data / "metrics")
     hub = Hub(cfg, tagmap, lens, recorder, metrics)
+    scans = ScanStore(data / "scans")
+    hub.scans = scans
+    processing = asyncio.Lock()  # one reconstruction at a time
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
@@ -86,8 +92,6 @@ def create_app(data: Path, public_url: str = "") -> FastAPI:
 
     @app.post("/api/lens/{device}/calibrate")
     async def calibrate_lens(device: str):
-        import asyncio
-
         result = await asyncio.to_thread(lens.calibrate, device)
         metrics.event("lens_calibration", device=device, **{k: v for k, v in result.items() if k not in ("K", "D")})
         if result.get("ok"):
@@ -126,6 +130,60 @@ def create_app(data: Path, public_url: str = "") -> FastAPI:
     @app.get("/api/sessions")
     def sessions():
         return recorder.list()
+
+    @app.post("/api/scans/start")
+    async def scan_start(body: dict = Body(default={})):
+        s = scans.start(str(body.get("device", ""))[:64])
+        metrics.event("scan_start", id=s.id, device=body.get("device"))
+        await hub.broadcast({"type": "scan", "id": s.id, "status": "recording"})
+        return {"id": s.id, "settings": cfg["scan"]}
+
+    @app.post("/api/scans/{sid}/frame")
+    async def scan_frame(sid: str, request: Request, t: float):
+        s = scans.get(sid)
+        if not s:
+            raise HTTPException(404, "no such scan")
+        return {"frames": await asyncio.to_thread(s.add_frame, t, await request.body())}
+
+    @app.post("/api/scans/{sid}/stop")
+    async def scan_stop(sid: str):
+        s = scans.get(sid)
+        if not s:
+            raise HTTPException(404, "no such scan")
+        meta = s.update_meta(status="queued", stopped=time.time(), frames=s.count)
+        metrics.event("scan_stop", id=sid, frames=s.count, duration_s=round(meta["stopped"] - meta["started"], 1))
+        asyncio.create_task(process_scan(s))
+        await hub.broadcast({"type": "scan", "id": sid, "status": "queued", "frames": s.count})
+        return meta
+
+    async def process_scan(s) -> None:
+        loop = asyncio.get_running_loop()
+
+        def progress(stage: str, frac: float) -> None:
+            asyncio.run_coroutine_threadsafe(hub.broadcast(
+                {"type": "scan", "id": s.id, "status": "processing", "stage": stage, "progress": frac}), loop)
+
+        async with processing:
+            result = await asyncio.to_thread(s.process, cfg["scan"], progress)
+        summary = {k: result.get(k) for k in ("ok", "error", "registered", "total", "scale_method", "up_method",
+                                              "room_size_m", "timings_s")}
+        metrics.event("scan_processed", id=s.id, **summary)
+        await hub.broadcast({"type": "scan", "id": s.id, "status": "done" if result["ok"] else "failed", **summary})
+
+    @app.get("/api/scans")
+    def scan_list():
+        return scans.list()
+
+    @app.get("/api/scans/latest")
+    def scan_latest():
+        return scans.latest_result() or {}
+
+    @app.get("/api/scans/{sid}")
+    def scan_get(sid: str):
+        s = scans.get(sid)
+        if not s:
+            raise HTTPException(404, "no such scan")
+        return {"meta": s.meta(), "result": s.result()}
 
     @app.get("/api/qr.svg")
     def qr_svg():

@@ -61,6 +61,19 @@ DEFAULTS: dict[str, dict[str, Any]] = {
         "min_visibility": 0.5,
         "stand_pose_average_s": 2.0,
     },
+    "scan": {
+        "capture_fps": 5,  # frames per second sent from the phone while scanning
+        "capture_max_side": 1280,  # longest frame side in pixels
+        "jpeg_quality": 0.85,
+        "camera_model": "SIMPLE_RADIAL",  # COLMAP lens model; OPENCV for stronger distortion
+        "max_image_size": 1024,  # frames are downscaled to this for feature extraction
+        "max_features": 4096,  # SIFT features per frame; more = slower, more robust
+        "match_overlap": 10,  # each frame is matched with this many neighbours in time
+        "floor_percentile": 3.0,  # floor height = this percentile of point heights below the cameras
+        "camera_height_m": 1.35,  # assumed phone height while scanning; sets scale until measured
+        "imu_min_correlation": 0.5,  # accelerometer scale is used only if it agrees with the camera this well
+        "max_points": 20000,  # points kept for the room view
+    },
     "learn": {
         "baseline_s": 30,  # empty-space capture before a walk
         "coverage_cell_m": 0.25,  # floor grid size for the coverage heatmap

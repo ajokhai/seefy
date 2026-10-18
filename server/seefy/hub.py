@@ -94,6 +94,7 @@ class Hub:
         self._solve_pending_since: float | None = None
         self._solving = False
         self._tasks: list[asyncio.Task] = []
+        self.scans = None  # ScanStore, set by the app
 
     # -- lifecycle ----------------------------------------------------------
 
@@ -161,6 +162,10 @@ class Hub:
             await self._on_pose(dev, msg, recv)
         elif kind == "tags":
             await self._on_tags(dev, msg, recv)
+        elif kind == "motion":
+            scan = self.scans.get(str(msg.get("scan", ""))) if self.scans else None
+            if scan:
+                scan.add_motion(msg.get("samples", []))
         elif kind == "keypoints":
             dev.capture_latency_ms = ema(dev.capture_latency_ms, recv - msg["t"])
             self.recorder.write("keypoints", {"device": dev.id, "recv": recv, **_strip(msg)})
@@ -261,6 +266,9 @@ class Hub:
             await dev.ws.send_text(text)
         except Exception:
             pass
+
+    async def broadcast(self, msg: dict) -> None:
+        await self._broadcast(msg)
 
     async def broadcast_config(self) -> None:
         await self._broadcast({"type": "config", "config": self.cfg.values})
