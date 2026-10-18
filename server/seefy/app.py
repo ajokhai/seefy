@@ -15,6 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from .config import Config
 from .hub import Hub
 from .lens import LensStore
+from .metrics import MetricsLog
 from .recorder import Recorder
 from .tagmap import TagMap
 
@@ -26,7 +27,8 @@ def create_app(data: Path, public_url: str = "") -> FastAPI:
     tagmap = TagMap(data / "tagmap", cfg)
     lens = LensStore(data / "devices", cfg)
     recorder = Recorder(data / "sessions")
-    hub = Hub(cfg, tagmap, lens, recorder)
+    metrics = MetricsLog(data / "metrics")
+    hub = Hub(cfg, tagmap, lens, recorder, metrics)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
@@ -52,12 +54,14 @@ def create_app(data: Path, public_url: str = "") -> FastAPI:
     @app.put("/api/config")
     async def put_config(changes: dict = Body(...)):
         cfg.update(changes)
+        metrics.event("config_change", changes=changes)
         await hub.broadcast_config()
         return {"values": cfg.values, "overrides": cfg.overrides}
 
     @app.post("/api/config/reset")
     async def reset_config():
         cfg.reset()
+        metrics.event("config_change", changes="reset to defaults")
         await hub.broadcast_config()
         return {"values": cfg.values, "overrides": cfg.overrides}
 
@@ -72,6 +76,7 @@ def create_app(data: Path, public_url: str = "") -> FastAPI:
     @app.post("/api/tagmap/reset")
     async def reset_tagmap():
         tagmap.reset()
+        metrics.event("map_reset")
         await hub.broadcast_tagmap()
         return tagmap.to_json()
 
@@ -84,6 +89,7 @@ def create_app(data: Path, public_url: str = "") -> FastAPI:
         import asyncio
 
         result = await asyncio.to_thread(lens.calibrate, device)
+        metrics.event("lens_calibration", device=device, **{k: v for k, v in result.items() if k not in ("K", "D")})
         if result.get("ok"):
             await hub.send_lens(device)
         return result
@@ -105,12 +111,15 @@ def create_app(data: Path, public_url: str = "") -> FastAPI:
             })
         except ValueError as e:
             raise HTTPException(400, str(e))
+        metrics.event("session_start", **s.summary())
         await hub.broadcast_session()
         return s.summary()
 
     @app.post("/api/session/stop")
     async def stop_session():
         summary = recorder.stop()
+        if summary:
+            metrics.event("session_stop", **summary)
         await hub.broadcast_session()
         return summary or {}
 

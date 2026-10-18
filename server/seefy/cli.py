@@ -12,11 +12,14 @@ import uvicorn
 
 from .app import WEB_DIST, create_app, create_http_helper
 from .certs import ensure_certs
+from .metrics import report
 from .net import MdnsAdvertiser, lan_ip, local_hostname
 
 
 def main() -> None:
     ap = argparse.ArgumentParser(prog="seefy", description="Seefy host: serves the web app on your LAN.")
+    ap.add_argument("command", nargs="?", default="serve", choices=["serve", "report"],
+                    help="serve (default) or report: summarise the results log into <data>/report.md")
     ap.add_argument("--port", type=int, default=8443, help="HTTPS port (default 8443)")
     ap.add_argument("--http-port", type=int, default=8080, help="plain-HTTP helper port, 0 to disable")
     ap.add_argument("--data", type=Path, default=Path("data"), help="data directory (one per space)")
@@ -24,6 +27,11 @@ def main() -> None:
     args = ap.parse_args()
 
     data = args.data.resolve()
+    if args.command == "report":
+        text = report(data)
+        (data / "report.md").write_text(text)
+        print(text)
+        return
     ip = lan_ip()
     names = ["seefy.local", local_hostname(), "localhost"]
     crt, key, ca = ensure_certs(data / "certs", names, [ip, "127.0.0.1"])

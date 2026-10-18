@@ -24,6 +24,7 @@ from . import geometry as g
 from .clock import host_ms
 from .config import Config
 from .lens import LensStore
+from .metrics import MetricsLog
 from .net import mac_for_ip
 from .recorder import Recorder
 from .tagmap import TagMap
@@ -87,8 +88,8 @@ class Device:
 
 
 class Hub:
-    def __init__(self, cfg: Config, tagmap: TagMap, lens: LensStore, recorder: Recorder):
-        self.cfg, self.tagmap, self.lens, self.recorder = cfg, tagmap, lens, recorder
+    def __init__(self, cfg: Config, tagmap: TagMap, lens: LensStore, recorder: Recorder, metrics: MetricsLog):
+        self.cfg, self.tagmap, self.lens, self.recorder, self.metrics = cfg, tagmap, lens, recorder, metrics
         self.devices: dict[str, Device] = {}
         self._solve_pending_since: float | None = None
         self._solving = False
@@ -125,6 +126,7 @@ class Hub:
             "tagmap": self.tagmap.to_json(), "lens": self.lens.get(dev.id), "session": self._session(),
         })
         self.devices[dev.id] = dev  # only now does it receive broadcasts, so "welcome" always comes first
+        self.metrics.event("connect", device=dev.id, name=dev.name, role=dev.role, ip=ip, ua=dev.ua)
         try:
             while True:
                 msg = await ws.receive_text()
@@ -134,6 +136,7 @@ class Hub:
         finally:
             if self.devices.get(dev.id) is dev:
                 del self.devices[dev.id]
+                self.metrics.event("disconnect", device=dev.id, connected_s=round(time.time() - dev.connected_at))
 
     # -- messages -----------------------------------------------------------
 
@@ -212,13 +215,20 @@ class Hub:
         finally:
             self._solving = False
         tm = self.tagmap.to_json()
+        self.metrics.event("map_solve", **{k: tm[k] for k in ("passes", "frames", "frames_used", "rms_px", "solve_ms")},
+                           tags=len(tm["tags"]), tag_rms_px={k: v["rms_px"] for k, v in tm["tags"].items()})
         await self._broadcast({"type": "tagmap", "tagmap": tm})
         return tm
 
     async def _state_loop(self) -> None:
+        n = 0
         while True:
             await asyncio.sleep(0.5)
-            await self._broadcast({"type": "state", **self.state()})
+            state = self.state()
+            await self._broadcast({"type": "state", **state})
+            n += 1
+            if n % 10 == 0 and self.devices:  # every 5 s while anything is connected
+                self.metrics.snapshot(state)
 
     def state(self) -> dict:
         tm = self.tagmap.to_json()

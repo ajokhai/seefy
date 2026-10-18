@@ -37,5 +37,24 @@ conn.on("welcome", () => {
     route();
   }
 });
+
+// If the live connection never opens, the usual cause is an untrusted certificate: iOS Safari lets the
+// page load after "visit this website" but still blocks its WebSocket. Explain how to fix it.
+setTimeout(() => {
+  if (!first) return;
+  const helper = `http://${location.hostname}:8080`;
+  main.replaceChildren(
+    h("section", { class: "card" },
+      h("h3", {}, "Can't open the live connection to Seefy"),
+      h("p", {}, "This page loaded, but the browser is blocking its live connection to the Seefy server. " +
+        "On iPhone this happens until the phone trusts this computer's certificate. It takes a minute, once:"),
+      h("ol", {},
+        h("li", {}, "Open ", h("a", { href: `${helper}/ca.crt` }, `${helper}/ca.crt`), " in Safari and tap Allow."),
+        h("li", {}, "Settings → Profile Downloaded → Install."),
+        h("li", {}, "Settings → General → About → Certificate Trust Settings → turn on “Seefy local CA”."),
+        h("li", {}, "Come back and reload this page.")),
+      h("p", { class: "muted" }, `Instructions with links: ${helper}. If this is a computer, check that the Seefy server is still running.`)),
+  );
+}, 5000);
 window.addEventListener("hashchange", route);
 conn.connect();
