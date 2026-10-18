@@ -1,0 +1,37 @@
+[project]
+name = "seefy"
+version = "0.1.0"
+description = "Sense movement in a space with a WiFi CSI mesh, calibrated by walking it with a phone camera."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "numpy>=2.0",
+    "scipy>=1.14",
+    "opencv-python-headless>=4.10",
+    "pyarrow>=18.0",
+    "cryptography>=43.0",
+    "qrcode>=8.0",
+    "zeroconf>=0.136",
+]
+
+[project.scripts]
+seefy = "seefy.cli:main"
+
+[dependency-groups]
+dev = ["pytest>=8.3", "httpx>=0.27"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build]
+dev-mode-dirs = ["server"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["server/seefy"]
+
+[tool.pytest.ini_options]
+testpaths = ["server/tests"]
+pythonpath = ["server"]

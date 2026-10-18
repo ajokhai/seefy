@@ -1,0 +1,16 @@
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+
+# Web
+web/node_modules/
+web/dist/
+web/public/vendor/
+web/public/models/
+
+# Runtime data: certificates, sessions, tag maps, device calibrations
+data/

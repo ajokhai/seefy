@@ -1,26 +1,26 @@
-# DensePose_from_WiFi
-Using of the WiFi signal in combination with deep learning architectures, commonly used in computer vision, to estimate dense human pose correspondence. 
+# Seefy
 
-![Teaser image](./assets/WiFi_Densepose.png)
+Sense movement anywhere in a space using the WiFi network you're already on.
 
-> **VITON-HD: High-Resolution Virtual Try-On via Misalignment-Aware Normalization**<br>
+Fixed WiFi nodes (ESP32 boards) form a sensing mesh. You teach it by walking the space once with your phone: the phone's camera maps the rooms and tracks where you are, while the mesh records how the WiFi signal changes as your body moves through each spot. Afterwards, the system reads the mesh alone, with no camera, and shows which room people are in, where, and how they're moving.
 
-> **Abstract:** *Advances in computer vision and machine learning techniques have led to significant development in 2D and 3D human pose estimation from RGB cameras, LiDAR, and radars. However, human pose estimation from images is adversely affected by occlusion and lighting, which are common in many scenarios of interest. Radar and LiDAR technologies, on the other hand, need specialized hardware that is expensive and power-intensive. Furthermore, placing these sensors in non-public areas raises significant privacy concerns.
-To address these limitations, recent research has explored the use of WiFi antennas (1D sensors) for body segmentation and key-point body detection. This paper further expands on the use of the WiFi signal in combination with deep learning architectures, commonly used in computer vision, to estimate dense human pose correspondence. We developed a deep neural network that maps the phase and amplitude of WiFi signals to UV coordinates within 24 human regions. The results of the study reveal that our model can estimate the dense pose of multiple subjects, with comparable performance to image-based approaches, by utilizing WiFi signals as the only input. This paves the way for low-cost, broadly accessible, and privacy-preserving algorithms for human sensing.*
+Everything runs as one web app on your local network. There's no cloud and nothing to install on the phone.
 
-## Installation
+**Status:** early build. See [docs/PLAN.md](docs/PLAN.md) for the full design and phases, and [docs/FIDELITY.md](docs/FIDELITY.md) for the settings that affect accuracy.
 
-Clone this repository:
+## Layout
 
-```
-git clone https://github.com/superstar1225/DensePose_from_WiFi.git
-cd ./DensePose_from_WiFi/
-```
+| Path | What |
+|---|---|
+| `server/seefy/` | Host service (Python): HTTPS, WebSocket hub, clock sync, tag map, lens calibration, session recorder |
+| `web/` | Browser app (TypeScript + Vite): Live, Learn and Sensors screens |
+| `firmware/csi_node/` | ESP32 CSI node firmware (Phase 3) |
+| `ml/` | Sensing models (Phase 5) |
+| `legacy/` | The original DensePose-from-WiFi experiments |
+| `docs/` | Plan, fidelity notes, the DensePose From WiFi paper |
 
-Install PyTorch and other dependencies:
+## Background
 
-```
-conda create -y -n [ENV] python=3.8
-conda activate [ENV]
-conda install -y pytorch=[>=1.6.0] torchvision cudatoolkit=[>=9.2] -c pytorch
-```
+This started as an attempt to reproduce [*DensePose From WiFi*](docs/papers/densepose-from-wifi.pdf) (Geng, Huang, De la Torre, 2022). That paper maps WiFi signal measurements to dense human pose using a camera-supervised network. Seefy keeps the camera-as-teacher idea and turns it into a practical, phone-calibrated system for whole spaces.
+
+![WiFi DensePose](docs/img/wifi-densepose.png)
