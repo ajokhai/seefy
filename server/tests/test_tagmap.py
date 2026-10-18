@@ -33,16 +33,18 @@ def look_at(cam, target):
     return g.inv(pose(x, y, z, cam))  # T_cam_world
 
 
-def synth_frames(rng, n, noise_px, pass_id):
+def synth_frames(rng, n, noise_px, pass_id, tags=None, size_of=None, box=((-0.5, 2.5), (-0.2, 2.0))):
+    tags = tags or TRUE_TAGS
+    size_of = size_of or (lambda i: ORIGIN_SIZE if i == 0 else SIZE)
     frames = []
     while len(frames) < n:
-        cam = np.array([rng.uniform(-0.5, 2.5), rng.uniform(-0.2, 2.0), rng.uniform(1.0, 1.6)])
-        a, b = rng.choice(list(TRUE_TAGS), 2, replace=False)
-        target = (TRUE_TAGS[a][:3, 3] + TRUE_TAGS[b][:3, 3]) / 2
+        cam = np.array([rng.uniform(*box[0]), rng.uniform(*box[1]), rng.uniform(1.0, 1.6)])
+        a, b = rng.choice(list(tags), 2, replace=False)
+        target = (tags[a][:3, 3] + tags[b][:3, 3]) / 2
         T_cw = look_at(cam, target)
         dets = {}
-        for i, T in TRUE_TAGS.items():
-            local = g.tag_corners(ORIGIN_SIZE if i == 0 else SIZE)
+        for i, T in tags.items():
+            local = g.tag_corners(size_of(i))
             facing = np.dot(T[:3, 2], cam - T[:3, 3]) > 0
             pc = g.transform(T_cw, g.transform(T, local))
             if not facing or np.any(pc[:, 2] < 0.2):
@@ -82,3 +84,20 @@ def test_no_origin_means_no_map():
         f.dets.pop(0, None)
     sol = solve([f for f in frames if len(f.dets) >= 2], SIZE, 0, 1.5, 3, 2000, ORIGIN_SIZE)
     assert sol.tags == {}
+
+
+def test_screens_upright_origin_and_mixed_sizes():
+    """Tags shown on screens: origin upright on a monitor 1 m up, each tag a different size."""
+    tags = {
+        0: g.origin_pose("upright", 1.0),  # monitor at y = 0, screen facing -y (into the room)
+        1: pose([1, 0, 0], [0, 0, 1], [0, -1, 0], [1.4, 0.2, 0.8]),  # laptop on a desk beside the monitor
+        2: pose([0, 1, 0], [0, 0, 1], [1, 0, 0], [-1.0, -1.0, 0.9]),  # phone propped on a side shelf
+    }
+    sizes = {0: 0.25, 1: 0.14, 2: 0.08}  # monitor, laptop, phone
+    rng = np.random.default_rng(4)
+    # The origin faces -y, so cameras stand on that side of it.
+    frames = synth_frames(rng, 150, 0.4, "s", tags, sizes.get, box=((-0.5, 2.5), (-3.0, -0.6)))
+    sol = solve(frames, SIZE, 0, 1.5, 3, 2000, ORIGIN_SIZE, sizes, g.origin_pose("upright", 1.0))
+    assert set(sol.tags) == set(tags)
+    err = max(np.linalg.norm(sol.tags[i][:3, 3] - tags[i][:3, 3]) for i in tags)
+    assert err < 0.03

@@ -103,14 +103,15 @@ def _pose_frame(f: Frame, cands: dict[int, list[np.ndarray]], world_tag: dict[in
 
 
 def _initial_guess(frames: list[Frame], local: dict[int, np.ndarray], origin: int, min_obs: int,
-                   obs_count: dict[int, int], gate_px: float = 8.0) -> tuple[dict[int, np.ndarray], dict[int, np.ndarray]]:
+                   obs_count: dict[int, int], origin_T: np.ndarray,
+                   gate_px: float = 8.0) -> tuple[dict[int, np.ndarray], dict[int, np.ndarray]]:
     """Grow the map outward from the origin.
 
     Each new tag gets the candidate pose (from every frame, both IPPE solutions)
     that best explains all posed frames seeing it, which rejects flipped poses.
     """
     cands = [{i: g.tag_pose_candidates(c, f.K, local[i]) for i, c in f.dets.items()} for f in frames]
-    world_tag: dict[int, np.ndarray] = {origin: np.eye(4)}
+    world_tag: dict[int, np.ndarray] = {origin: origin_T}
     while True:
         cam_world: dict[int, np.ndarray] = {}
         for fi, f in enumerate(frames):
@@ -140,8 +141,15 @@ def _initial_guess(frames: list[Frame], local: dict[int, np.ndarray], origin: in
 
 
 def solve(frames: list[Frame], size: float, origin: int, huber_px: float, min_obs: int, max_frames: int,
-          origin_size: float | None = None) -> Solution:
-    """Solve tag world poses. Room tags are `size` metres; the origin tag may be larger (`origin_size`)."""
+          origin_size: float | None = None, sizes: dict[int, float] | None = None,
+          origin_T: np.ndarray | None = None) -> Solution:
+    """Solve tag world poses.
+
+    Tags are `size` metres unless listed in `sizes`; the origin tag may be larger (`origin_size`).
+    The origin tag is held fixed at `origin_T` (identity: flat on the floor at the world origin).
+    """
+    origin_T = np.eye(4) if origin_T is None else origin_T
+    sizes = sizes or {}
     t0 = time.perf_counter()
     frames = _subsample(frames, max_frames)
     obs_count: dict[int, int] = {}
@@ -151,12 +159,17 @@ def solve(frames: list[Frame], size: float, origin: int, huber_px: float, min_ob
     if obs_count.get(origin, 0) == 0:
         return Solution(tag_obs=obs_count)
 
-    local = {i: g.tag_corners(origin_size if (i == origin and origin_size) else size) for i in obs_count}
-    world_tag, cam_world = _initial_guess(frames, local, origin, min_obs, obs_count)
+    def size_of(i: int) -> float:
+        if i in sizes:
+            return sizes[i]
+        return origin_size if (i == origin and origin_size) else size
+
+    local = {i: g.tag_corners(size_of(i)) for i in obs_count}
+    world_tag, cam_world = _initial_guess(frames, local, origin, min_obs, obs_count, origin_T)
     tag_ids = [i for i in world_tag if i != origin]
     frame_ids = sorted(cam_world)
     if not frame_ids:
-        return Solution(tags={origin: np.eye(4)}, tag_obs=obs_count)
+        return Solution(tags={origin: origin_T}, tag_obs=obs_count)
 
     # Bundle adjustment over all tag poses (origin fixed) and camera poses.
     nt, nf = len(tag_ids), len(frame_ids)
@@ -179,8 +192,8 @@ def solve(frames: list[Frame], size: float, origin: int, huber_px: float, min_ob
     def residuals(x: np.ndarray) -> np.ndarray:
         pt = x[:6 * nt].reshape(nt, 6)
         pf = x[6 * nt:].reshape(nf, 6)
-        Rt = np.concatenate([g.rodrigues_batch(pt[:, :3]), np.eye(3)[None]])
-        tt = np.concatenate([pt[:, 3:], np.zeros((1, 3))])
+        Rt = np.concatenate([g.rodrigues_batch(pt[:, :3]), origin_T[None, :3, :3]])
+        tt = np.concatenate([pt[:, 3:], origin_T[None, :3, 3]])
         Rf, tf = g.rodrigues_batch(pf[:, :3]), pf[:, 3:]
         pw = np.einsum("nij,nkj->nki", Rt[obs_t], local_t[obs_t]) + tt[obs_t][:, None, :]
         pc = np.einsum("nij,nkj->nki", Rf[obs_f], pw) + tf[obs_f][:, None, :]
@@ -201,7 +214,7 @@ def solve(frames: list[Frame], size: float, origin: int, huber_px: float, min_ob
     per_obs = np.sqrt((res.fun.reshape(-1, 4, 2) ** 2).sum(axis=2).mean(axis=1))
 
     sol = Solution(tag_obs=obs_count, frames_used=nf)
-    sol.tags[origin] = np.eye(4)
+    sol.tags[origin] = origin_T
     for i in tag_ids:
         n = 6 * tidx[i]
         sol.tags[i] = g.to_T(res.x[n:n + 3], res.x[n + 3:n + 6])
@@ -276,12 +289,27 @@ class TagMap:
             frames = list(self.frames)
         m, tr = self.cfg["mapping"], self.cfg["tracking"]
         sol = solve(frames, tr["tag_size_m"], tr["origin_tag_id"], m["huber_px"], m["min_obs_per_tag"],
-                    m["max_frames"], tr["origin_tag_size_m"])
+                    m["max_frames"], tr["origin_tag_size_m"], self.sizes(), self.origin_T())
         with self._lock:
             self.solution = sol
             self.version += 1
         (self.dir / "map.json").write_text(json.dumps(self.to_json()))
         return sol
+
+    # -- tag geometry -------------------------------------------------------
+
+    def sizes(self) -> dict[int, float]:
+        return {int(k): float(v) for k, v in self.cfg["tracking"]["tag_sizes"].items()}
+
+    def size_of(self, i: int) -> float:
+        tr = self.cfg["tracking"]
+        if i in self.sizes():
+            return self.sizes()[i]
+        return tr["origin_tag_size_m"] if i == tr["origin_tag_id"] else tr["tag_size_m"]
+
+    def origin_T(self) -> np.ndarray:
+        tr = self.cfg["tracking"]
+        return g.origin_pose(tr["origin_mount"], tr["origin_height_m"])
 
     # -- output -------------------------------------------------------------
 
@@ -291,7 +319,7 @@ class TagMap:
         size, origin = tr["tag_size_m"], tr["origin_tag_id"]
 
         def corners(i: int) -> np.ndarray:
-            return g.tag_corners(tr["origin_tag_size_m"] if i == origin else size)
+            return g.tag_corners(self.size_of(i))
 
         def num(v: float):
             return None if np.isnan(v) else round(v, 3)
@@ -301,6 +329,8 @@ class TagMap:
             "origin": origin,
             "tag_size_m": size,
             "origin_tag_size_m": tr["origin_tag_size_m"],
+            "origin_mount": tr["origin_mount"],
+            "origin_height_m": tr["origin_height_m"],
             "frames": len(self.frames),
             "frames_used": s.frames_used,
             "passes": len(self.passes),
@@ -311,7 +341,7 @@ class TagMap:
                 str(i): {
                     "T": T.ravel().tolist(),
                     "corners": g.transform(T, corners(i)).ravel().tolist(),
-                    "size": tr["origin_tag_size_m"] if i == origin else size,
+                    "size": self.size_of(i),
                     "rms_px": num(s.tag_rms_px.get(i, float("nan"))),
                     "obs": s.tag_obs.get(i, 0),
                 }

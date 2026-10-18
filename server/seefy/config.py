@@ -16,8 +16,11 @@ from typing import Any
 DEFAULTS: dict[str, dict[str, Any]] = {
     "tracking": {
         "tag_size_m": 0.10,  # printed black-square edge length of room tags
-        "origin_tag_id": 0,  # tag lying flat on the floor; defines world origin and "up"
+        "origin_tag_id": 0,  # defines the world origin and "up"
+        "origin_mount": "floor",  # floor: printed tag lying flat | upright: on a screen or wall, standing straight
+        "origin_height_m": 1.0,  # upright origin only: height of the tag centre above the floor
         "origin_tag_size_m": 0.20,  # floor tag is seen at a steep angle, so it is printed larger
+        "tag_sizes": {},  # per-tag sizes in metres, e.g. tags shown on screens: {"3": 0.142}
         "room_tag_max_id": 49,  # room tags are 0..this; higher ids are ignored by tracking
         "capture_width": 1280,
         "capture_height": 720,
@@ -86,7 +89,9 @@ def _validate(over: dict) -> dict:
             if key not in DEFAULTS[section]:
                 continue
             default = DEFAULTS[section][key]
-            if isinstance(default, bool):
+            if isinstance(default, dict):
+                value = {str(k): float(v) for k, v in dict(value).items() if v}
+            elif isinstance(default, bool):
                 value = bool(value)
             elif isinstance(default, int):
                 value = int(value)

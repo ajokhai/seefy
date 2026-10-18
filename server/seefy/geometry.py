@@ -15,6 +15,21 @@ def tag_corners(size: float) -> np.ndarray:
     return np.array([[-h, h, 0], [h, h, 0], [h, -h, 0], [-h, -h, 0]], dtype=np.float64)
 
 
+def origin_pose(mount: str, height_m: float) -> np.ndarray:
+    """World pose of the origin tag. World frame: z up, floor at z = 0.
+
+    floor:   tag lies flat, so the world matches the tag frame.
+    upright: tag stands vertically (on a screen or wall) with its centre height_m above the floor.
+             World x runs along the tag's x, z is the tag's up (y), and y points away from the
+             viewer, through the tag's face.
+    """
+    T = np.eye(4)
+    if mount == "upright":
+        T[:3, :3] = np.array([[1, 0, 0], [0, 0, -1], [0, 1, 0]], dtype=np.float64)  # columns: tag x, y, z in world
+        T[2, 3] = height_m
+    return T
+
+
 def to_T(rvec: np.ndarray, tvec: np.ndarray) -> np.ndarray:
     T = np.eye(4)
     T[:3, :3] = cv2.Rodrigues(np.asarray(rvec, dtype=np.float64).reshape(3))[0]
