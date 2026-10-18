@@ -194,6 +194,13 @@ def create_app(data: Path, public_url: str = "") -> FastAPI:
         return Response(buf.getvalue(), media_type="image/svg+xml")
 
     if WEB_DIST.exists():
+        @app.middleware("http")
+        async def no_stale_pages(request, call_next):
+            response = await call_next(request)
+            if request.url.path in ("/", "/index.html", "/print.html", "/tag-worker.js"):
+                response.headers["Cache-Control"] = "no-cache"
+            return response
+
         app.mount("/", StaticFiles(directory=WEB_DIST, html=True), name="web")
     else:
         @app.get("/")

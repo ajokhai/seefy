@@ -210,16 +210,25 @@ export function guideScreen(): { el: HTMLElement; destroy: () => void } {
 
   // ---- steps -----------------------------------------------------------------
 
+  const phoneConnected = () => (conn.state?.devices ?? []).find((d: any) => d.role === "phone");
   const scanSteps: Step[] = [
     ...(isTouch ? [] : [{
       id: "phone",
       title: "Open Seefy on your phone",
-      isDone: () => done.has("phone"),
-      render: (b: HTMLElement) => b.append(
-        h("p", {}, "Scanning uses your phone's camera. Scan this code with the phone (same WiFi), then continue there."),
-        h("img", { src: "/api/qr.svg", width: 160, height: 160, class: "qr", alt: "QR code to open Seefy" }),
-        h("button", { class: "primary", onclick: () => markDone("phone") }, "Continue"),
-      ),
+      isDone: () => done.has("phone") || !!phoneConnected(),
+      render: (b: HTMLElement) => {
+        const phone = phoneConnected();
+        if (phone) {
+          b.append(h("p", { class: "good" }, `✓ ${phone.name} connected. Carry on there.`));
+          return;
+        }
+        b.append(
+          h("p", {}, "Scanning uses your phone's camera. Scan this code with the phone (same WiFi), then carry on there."),
+          h("img", { src: "/api/qr.svg", width: 160, height: 160, class: "qr", alt: "QR code to open Seefy" }),
+          h("p", { class: "muted" }, "This step ticks itself when the phone connects."),
+          h("button", { class: "link-btn", onclick: () => markDone("phone") }, "Skip"),
+        );
+      },
     }]),
     {
       id: "scan",
@@ -399,7 +408,15 @@ export function guideScreen(): { el: HTMLElement; destroy: () => void } {
       }
     }),
     conn.on("tagmap", renderAll),
+    conn.on("state", () => {
+      const present = !!phoneConnected();
+      if (present !== phoneWasPresent) {
+        phoneWasPresent = present;
+        renderAll();
+      }
+    }),
   );
+  let phoneWasPresent = !!phoneConnected();
   refreshScan();
   renderAll();
   return { el, destroy: () => offs.forEach((off) => off()) };

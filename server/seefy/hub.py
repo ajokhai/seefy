@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import numpy as np
-from fastapi import WebSocket
+from fastapi import WebSocket, WebSocketDisconnect
 
 from . import geometry as g
 from .clock import host_ms
@@ -120,7 +120,7 @@ class Hub:
         old = self.devices.get(key)
         if old:  # same tab reconnected (page reload); drop the stale socket
             try:
-                await old.ws.close()
+                await old.ws.close(code=4000, reason="replaced")
             except Exception:
                 pass
         if dev.role == "phone":
@@ -130,17 +130,22 @@ class Hub:
             "tagmap": self.tagmap.to_json(), "lens": self.lens.get(dev.id), "session": self._session(),
         })
         self.devices[key] = dev  # only now does it receive broadcasts, so "welcome" always comes first
-        self.metrics.event("connect", device=dev.id, name=dev.name, role=dev.role, ip=ip, ua=dev.ua)
+        self.metrics.event("connect", device=dev.id, tab=dev.tab, name=dev.name, role=dev.role, ip=ip, ua=dev.ua)
+        close_code, close_reason = None, ""
         try:
             while True:
                 msg = await ws.receive_text()
                 await self._handle(dev, msg)
-        except Exception:
-            pass
+        except WebSocketDisconnect as e:
+            close_code, close_reason = e.code, e.reason or ""
+        except Exception as e:
+            close_reason = f"{type(e).__name__}: {e}"[:200]
         finally:
-            if self.devices.get(key) is dev:
+            replaced = self.devices.get(key) is not dev
+            if not replaced:
                 del self.devices[key]
-                self.metrics.event("disconnect", device=dev.id, connected_s=round(time.time() - dev.connected_at))
+            self.metrics.event("disconnect", device=dev.id, tab=dev.tab, connected_s=round(time.time() - dev.connected_at),
+                               code=close_code, reason=close_reason, replaced=replaced)
 
     # -- messages -----------------------------------------------------------
 

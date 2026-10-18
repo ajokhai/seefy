@@ -76,6 +76,9 @@ export class Conn {
   private syncTimer = 0;
 
   connect(): void {
+    // Never run two sockets at once: a stray second socket makes the server replace the first,
+    // whose close would then trigger yet another reconnect, and so on.
+    if (this.ws && this.ws.readyState <= WebSocket.OPEN) return;
     const q = new URLSearchParams({ role: isTouch ? "phone" : "viewer", device: this.id, name: this.name, tab: this.tab });
     const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws?${q}`);
     this.ws = ws;
@@ -84,10 +87,12 @@ export class Conn {
       this.emit("open", {});
       this.startSync();
     };
-    ws.onclose = () => {
+    ws.onclose = (e) => {
+      if (this.ws !== ws) return; // an old socket; a newer one is already in charge
       this.connected = false;
       window.clearTimeout(this.syncTimer);
       this.emit("close", {});
+      if (e.code === 4000) return; // replaced by this same tab elsewhere (e.g. a reload)
       window.setTimeout(() => this.connect(), 1000);
     };
     ws.onmessage = (e) => this.onMessage(JSON.parse(e.data));
