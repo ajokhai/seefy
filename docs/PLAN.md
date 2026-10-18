@@ -2,47 +2,62 @@
 
 ## Goal
 
-Sense movement anywhere in a space (one room, several rooms, a whole floor) using the WiFi network you're already on.
+Sense movement anywhere in a home using **only hardware you already own**: your WiFi router, your phone and your laptop. No extra boards, no special firmware. Anyone should be able to try it at home. Results will vary with what each person's hardware reports, and the app says what to expect from yours.
 
-1. **Learn pass, with a camera:** walk the space carrying your phone. Its camera maps the rooms, walls and divisions and tracks where you are. At the same time, a mesh of fixed WiFi nodes records how the signal changes as your body moves through each part of the space.
-2. **Sense, without a camera:** using what it learned, the system reads the WiFi mesh alone and gives a reasonable picture of movement in the space: which room someone is in, where in it, how they're moving and, where trained, their posture. Walls between you and them don't matter; seeing through walls is a consequence of the approach, not the goal.
+1. **Learn pass, with a camera:** walk the space carrying your phone. Its camera maps the rooms, walls and divisions and tracks where you are. At the same time, the laptop listens to WiFi traffic and records how the signals change as your body moves through each part of the space.
+2. **Sense, without a camera:** using what it learned, the system reads WiFi signals alone and gives its best picture of movement in the space. Depending on your hardware, that ranges from "someone is moving" up to "which room, and roughly where."
 
 **It's one simple web app on your local network.** Run `seefy` on a laptop and open `https://<laptop>.local:8443` in any browser on the same WiFi: phone, tablet or desktop. Nothing to install from an app store, no cloud, no accounts. The app has three screens:
 
-- **Live:** the floor plan with people's positions, movement trails and (where trained) skeletons
+- **Live:** the floor plan with motion, occupancy and (where the hardware allows) positions and trails
 - **Learn:** the guided walk, coverage map and optional teacher-camera routine
-- **Sensors:** node status, packet rates, latency, sync and the CSI waterfall
+- **Sensors:** what signals your hardware provides, expected fidelity, link quality, latency and sync
 
-**Headline success:** after one learn pass, with no camera anywhere, the Live screen shows which room a person is in and tracks them around the floor plan in real time.
+**Headline success:** after one learn pass, with no camera, a stock home setup (router + laptop) reliably shows when someone is moving in the space and which part of it they're in.
 
 ## How it works
 
 ```
- ESP32 nodes (fixed, spread across the space)        Phone (web app)
- ├─ mesh: ping router ~100 Hz, CSI of replies        ├─ camera → own position (6DoF)
- └─ phone link: sniff the phone's own packets,       ├─ keyframes → room geometry
-    RSSI + CSI per node                              └─ MediaPipe pose (teacher mode)
-        │ UDP (timestamped)                                │ WebSocket (timestamped)
-        ▼                                                  ▼
- ┌───────────────────────────── Host (laptop) ─────────────────────────────┐
- │ ingest → clock sync → one timeline → recorder                           │
- │ space map (rooms, walls, doors) · radio map · model (CSI → movement)    │
- └─────────────────────────────────────────────────────────────────────────┘
-        │ WebSocket
-        ▼
- Live screen: floor plan with people, trails, skeletons
+ Router / mesh AP        Other fixed WiFi devices        Phone (web app)
+ (stock firmware)        (TV, speaker, printer…)         camera → own position, room map
+        │ beacons, data         │ their normal traffic          │ its own WiFi traffic
+        └──────────────┬────────┴───────────────────────────────┘
+                       ▼  radio
+ ┌──────────────────── Laptop (host, stays put) ────────────────────┐
+ │ signal capture: link RSSI · per-packet RSSI (monitor mode) · CSI │
+ │ clock sync → one timeline → recorder                             │
+ │ space map · radio map · model (signals → movement)              │
+ └──────────────────────────────────────────────────────────────────┘
+                       │ WebSocket
+                       ▼
+ Live screen on any browser
 ```
 
-- **Works on any network:** each node is an ordinary WiFi client. It pings the gateway at a fixed rate and measures the router's replies (CSI). You don't need router access or special firmware on the router.
-- **The phone is the learning probe.** It has to be a camera with WiFi on the same network (in practice, a phone), because it does three jobs at once:
+- **The laptop is the sensor.** It stays in one place during learning and sensing, and listens to the WiFi traffic already in the air.
+- **Every fixed WiFi device is a signal link.** A body moving between a transmitter and the laptop changes what the laptop receives. More fixed devices in more places means more links crossing the space, and better coverage. Devices only need to stay put; their positions aren't needed.
+- **The phone is the learning probe.** It has to be a camera with WiFi (in practice, a phone), because it does three jobs at once:
   - Its camera maps the space.
-  - The camera also tracks where the phone, and so the person holding it, is.
-  - Its WiFi transmissions are what the nodes measure.
-- **Two signals are learned against position:**
-  1. **Phone-link signal:** RSSI and CSI of the phone's own transmissions, as each node receives them.
-  2. **Mesh deltas:** how the router-to-node CSI changes because a body is moving through that part of the space.
-- **Sensing uses mesh deltas only,** so it works with no phone present and for anyone moving in the space.
-- **Nodes only need to stay put.** You never measure or enter their positions. They're solved automatically from the walk (see below) and used as fixed inputs when the solve is good.
+  - It tracks where the phone, and so the person holding it, is.
+  - Its own transmissions are another signal the laptop measures at each known position.
+- **Sensing uses only fixed links,** so it works with no phone present and for anyone moving in the space.
+
+## Signal sources and fidelity tiers
+
+The host detects what the hardware can report and picks the best source available. The Sensors screen shows the result and what to expect.
+
+| Tier | Source | What it needs | Links | Realistic camera-free output |
+|---|---|---|---|---|
+| **0** | **Link RSSI:** the laptop's own connection strength to the router | Any laptop. macOS: CoreWLAN; Linux: `iw`/nl80211; Windows: WLAN API | 1 | Motion yes/no; presence while moving |
+| **1** | **Per-packet RSSI (monitor mode):** signal strength of every frame the laptop hears, per transmitter | A laptop or USB adapter that supports monitor mode; admin rights | One per fixed device heard (router, mesh nodes, TV, speaker…) | Motion, plus coarse zone or room from fingerprinting, if enough fixed devices are spread around |
+| **2** | **CSI:** per-subcarrier channel measurements | Hardware that exposes CSI: some Linux WiFi cards (e.g. Intel AX200/AX210 with PicoScenes), Raspberry Pi with Nexmon, OpenWrt routers with supported chips, or an ESP32 if someone has one | One per CSI receiver | Finer position. Skeletons only with several CSI receivers |
+| **(r)** | **Router-reported client RSSI** from its admin page or app | Depends on the router; **unverified** for the Tenda Nova | One per client | Slow (seconds); useful as a coarse extra |
+
+Fidelity grows with three things, and the app should tell users which one to add next:
+1. **More fixed transmitters,** spread around the space
+2. **A better signal source** (moving up a tier)
+3. **More learn passes** (they accumulate)
+
+**This build's test setup:** Tenda Nova MW5 (AC1200 dual-band mesh, 2x2), iPhone 14 Pro, MacBook M1 Pro. **Expected:** tier 0 for sure, tier 1 if Mac monitor mode works without breaking the connection (untested, see Risks).
 
 ## The learn pass
 
@@ -51,155 +66,141 @@ Sense movement anywhere in a space (one room, several rooms, a whole floor) usin
 The camera builds a **space map**: floor plan, rooms, walls, doorways and major furniture, in meters.
 
 - **Phone position:**
-  - **iPhone** (Safari has no WebXR AR): a few printed AprilTags per room, on walls or the floor, not on the nodes. OpenCV.js (WebAssembly) on the phone detects them and solves the phone's 6DoF position at 20–30 fps. Tags seen together while walking through doorways link the rooms into one map. The printed tag size gives real-world scale.
+  - **iPhone** (Safari has no WebXR AR): a few printed AprilTags per room, on walls, plus a larger one flat on the floor as the origin. OpenCV.js (WebAssembly) on the phone detects them and solves the phone's 6DoF position at 20–30 fps. Tags seen together while walking through doorways link the rooms into one map. The printed tag size gives real-world scale.
   - **Android Chrome:** WebXR with ARCore tracks in real time with no tags.
-- **Lens calibration, once per phone:** wave the phone at a printed ChArUco board (a chessboard with tags) for about 10 seconds.
-- **Geometry:** keyframes (about 2 per second) go to the host with their camera positions. A monocular metric depth model (Depth Anything V2 Metric-Indoor) runs on the Mac's GPU, and Open3D TSDF fusion builds a mesh of every room walked.
+- **Lens calibration, once per phone:** wave the phone at a printed grid of AprilTags for about 10 seconds.
+- **Geometry:** keyframes (about 2 per second) go to the host with their camera positions. A monocular metric depth model (Depth Anything V2 Metric-Indoor) runs on the laptop's GPU, and Open3D TSDF fusion builds a mesh of every room walked.
   - Plane fitting turns the mesh into walls, floor and doorways.
   - Rooms are split at walls and doorways.
   - Open-vocabulary detection (YOLO-World + SAM) labels furniture.
-- **Whole-home refinement (optional):** after the walk, the recorded video can go through [LingBot-Map](https://github.com/Robbyant/lingbot-map), which handles long multi-room walkthroughs in one pass and fills areas without tags. Labels don't need to be real-time, only correctly timestamped, so this can run afterwards: minutes on an NVIDIA GPU, longer on the Mac. The tags provide scale and alignment.
+- **Whole-home refinement (optional):** the recorded walk can go through [LingBot-Map](https://github.com/Robbyant/lingbot-map) afterwards for a denser multi-room mesh (fast on an NVIDIA GPU, slower on a Mac). On iPhone Pro models, an Apple RoomPlan LiDAR scan can be imported instead.
 
-### 2. Record the signal
+### 2. Record the signals
 
-- **Why the nodes measure the phone:** browsers don't expose WiFi signal strength (neither Safari nor Chrome gives it to a web page, and iOS doesn't give it to native apps either). So:
-  - The phone streams pose and timing data to the host over a WebSocket, which keeps its radio sending steadily.
-  - The host finds the phone's MAC address from its IP (ARP table) and tells the nodes to listen for it.
-  - Each node sniffs the phone's frames and reports RSSI and full CSI per packet, at 30–100 Hz.
-  - Phones use a private MAC per network, which stays fixed for the session. The Screen Wake Lock API keeps the phone awake and sending.
+- **Transmitter discovery:** during a 30 s empty-space capture, the laptop lists every transmitter it hears, with packet rate and signal level. Fixed ones (router, mesh nodes, TV…) are marked as sensing links. Phones and laptops that move around are excluded.
+- **Phone link:** the host finds the phone's MAC address from its IP (ARP table) and tracks its frames separately. The phone streams pose data over a WebSocket, which keeps its radio sending steadily. The Screen Wake Lock API keeps it awake.
 - **Body position:** when the phone is held at chest height, the torso sits about 30–40 cm behind it along the viewing direction. Projected onto the floor, that labels where the body is at every moment.
 
 ### 3. The walk
 
-1. **Empty-space baseline (30 s):** step out of the mesh. Records the static signal.
-2. **Walk every room (about 3–5 min per room):** phone at chest height, camera facing outward, moving slowly through the whole area, doorways included. The Learn screen fills a coverage heatmap on the floor plan as you go and warns when tracking is lost or sync drifts.
-3. **Movement variety:** within the walk, also stand still, turn, sit down, walk fast. Each is labeled from the phone's motion, so the model learns more than one gait.
-4. **Teacher pass (optional, for skeletons):** phone on a stand in a room. MediaPipe gives full-body keypoints, and the stand's position comes from the tags. Repeat in the rooms where posture matters.
+1. **Empty-space baseline (30 s):** step out of the space. Records the static signal per link.
+2. **Walk every room (about 3–5 min per room):** phone at chest height, camera facing outward, moving slowly through the whole area. The Learn screen fills a coverage heatmap on the floor plan as you go and warns when tracking is lost or sync drifts.
+3. **Movement variety:** also stand still, turn, sit down, walk fast. Each is labeled from the phone's motion.
+4. **Teacher pass (optional, CSI tier only):** phone on a stand. MediaPipe gives full-body keypoints for skeleton training.
+5. **More passes:** every extra walk adds to the same dataset. Repeat at different times of day or with different people for better fidelity.
 
-### 4. Node positions (automatic)
+### 4. Radio map
 
-The walk records phone-link signal strength from hundreds of known phone positions. Signal falls off with distance, so fitting that falloff solves each node's position (least-squares multilateration), with a confidence score per node. Indoor multipath makes this rough, typically within 1–2 m. Confident positions become fixed model inputs, which speeds up training and limits which body positions can explain a signal change. Poor solves are simply left out.
+For every link, the walk produces a map of how the signal responds to a body at each floor position: the drop when someone blocks the direct path, and the fluctuation when they move near it. This shows exactly which areas the current links cover well and which are blind, so the app can suggest where a fixed device (or the laptop) would help most.
 
 ## Sensing without the camera
 
-The model reads the last 0.5–1 s of mesh CSI from all nodes and outputs, in order of difficulty:
+The model reads the last 1–2 s of signals from all fixed links and outputs what the tier supports, in order of difficulty:
 
-1. **Occupancy per room:** is anyone there. Most robust.
-2. **Position on the floor plan,** plus heading and speed, drawn as a live trail.
-3. **Movement type:** walking, still, sitting, turning.
-4. **Skeleton:** 17 keypoints in room coordinates, in rooms that had a teacher pass.
+1. **Motion:** is anyone moving. All tiers.
+2. **Zone or room:** which part of the space. Needs several links (tier 1 with spread-out devices, or tier 2).
+3. **Position on the floor plan** with a live trail. Tier 2, or a dense tier 1 setup.
+4. **Skeleton.** Tier 2 with several receivers only.
 
-The space map constrains everything: people stay on the floor, inside rooms, out of walls and furniture, and move between rooms only through doorways. This feeds the training loss and filters live output, which removes a large class of impossible, jittery predictions.
+The space map constrains everything: people stay on the floor and out of walls and furniture, and move between rooms only through doorways. That reduces jumpy, impossible output.
 
-**Limits:** WiFi senses moving bodies well and still bodies poorly; someone motionless for a long time can fade out (the tracker holds their last position). Walls and furniture come from the camera; WiFi's part is noticing when they change, which triggers a "relearn this room" prompt.
+**Limits:** WiFi senses moving bodies well and still bodies poorly. RSSI is coarse: it reacts mostly to a body blocking or reflecting near a link's direct path. Walls and furniture come from the camera; WiFi's part is noticing when things change.
 
 ## Latency and sync
 
-For learning, **timestamp sync matters more than raw latency.** Every sample can be aligned after the fact if its timestamp is correct. At walking pace (about 1.4 m/s), every 10 ms of sync error becomes about 1.4 cm of label error, so the target is **under 10 ms of sync error**.
+For learning, **timestamp sync matters more than raw latency.** At walking pace (about 1.4 m/s), every 10 ms of sync error becomes about 1.4 cm of label error, so the target is **under 10 ms of sync error**. Signal capture happens on the host, so it shares the host clock with no sync error; only the phone needs syncing.
 
-Live sensing needs low latency end to end. Target: **under 150 ms** from movement to screen.
+Live sensing target: **under 250 ms** from movement to screen. RSSI-based detection needs a short window of samples, so it's slower than the camera path.
 
 | Stage | Budget | How |
 |---|---|---|
-| Node → host | < 10 ms | Raw UDP on the LAN, small binary packets, no batching |
-| Node clocks | < 2 ms error | Nodes sync to the host over UDP every few seconds; each packet carries the node's own microsecond timestamp |
-| Phone camera → own position | 30–50 ms | Tag detection at reduced resolution on the phone; WebXR on Android |
-| Phone → host | < 20 ms | WebSocket, binary messages, pose only (keyframes go separately, at low priority) |
+| Signal capture | 10–100 ms | Link RSSI polled at the fastest rate the OS allows; monitor-mode frames timestamped on arrival |
+| Phone camera → own position | 30–50 ms | Tag detection on the phone; WebXR on Android |
+| Phone → host | < 20 ms | WebSocket, binary messages, pose only |
 | Phone clock | < 5 ms error | NTP-style handshake every few seconds, median of the fastest round trips; camera frame time from `requestVideoFrameCallback` |
-| Model inference | < 20 ms | Small model, sliding window, Mac GPU (MPS) |
+| Model inference | < 20 ms | Small model, sliding window |
 | Host → Live screen | < 20 ms | WebSocket push |
-
-The Sensors screen shows live latency and sync error per device.
 
 ## Stack
 
 | Part | Choice | Why |
 |---|---|---|
-| Sensor firmware | ESP-IDF + Espressif `esp-csi` | Official CSI support for router replies and sniffed frames (MAC filter); cheap |
-| Host service | Python 3.11, FastAPI + websockets, asyncio UDP | One process for ingest, sync, recording and inference; also serves the web app |
-| Discovery | mDNS (`seefy.local`) and a QR code printed at startup | Open it on the phone without typing an IP; nodes find the host the same way |
+| Host service | Python 3.12, FastAPI + websockets | One process for capture, sync, recording and inference; also serves the web app |
+| Signal capture | macOS CoreWLAN (link RSSI); libpcap with radiotap headers (monitor mode); pluggable CSI adapters | Uses the laptop's own WiFi; extra sources plug in without changing the rest |
+| Discovery | mDNS (`seefy.local`) and a QR code printed at startup | Open it on the phone without typing an IP |
 | Phone app | Browser page, TypeScript + Vite | No app-store install, works on iOS and Android |
-| Phone tracking | OpenCV.js tags (all phones); WebXR (Android Chrome) | Real-time, metric, in the browser |
-| Space map | Depth Anything V2 + Open3D TSDF, plane fitting, room segmentation; YOLO-World + SAM; optional LingBot-Map | Runs on the Mac; multi-room |
-| Pose teacher | MediaPipe Tasks Vision | Runs on the phone; only keypoints cross the network |
-| HTTPS on LAN | `mkcert` local CA | Browsers only allow camera access over HTTPS |
-| Storage | One folder per session: `csi.parquet`, `phone.parquet`, `pose.parquet`, `space.json`, keyframes | Easy to replay and inspect |
+| Phone tracking | OpenCV.js 4.10 AprilTags (all phones); WebXR (Android Chrome) | Real-time, metric, in the browser |
+| Space map | Depth Anything V2 + Open3D TSDF, plane fitting, room segmentation; YOLO-World + SAM; optional LingBot-Map / RoomPlan | Runs on the laptop |
+| Pose teacher | MediaPipe Tasks Vision | CSI tier only |
+| HTTPS on LAN | Local CA generated by the host | Browsers only allow camera access over HTTPS |
+| Storage | One folder per session: Parquet streams plus `meta.json` with a config snapshot | Easy to replay and compare passes |
 | ML | PyTorch | Already used by the existing code |
 
-## Hardware
+## What you need
 
-- **Nodes:** 2–3 per room, spread so their paths to the router cross the room (e.g. 4–6 for a 2–3 room apartment). About $10–15 each.
-  - **ESP32-C5 preferred:** it's dual-band (2.4 + 5 GHz). Most phones choose 5 GHz on dual-band networks, and a 2.4 GHz-only node can't hear them, which would force a 2.4 GHz-only network and break "any network." Espressif's `esp-csi` lists the C5 as supported.
-  - **ESP32-S3 fallback:** works if the phone can be kept on 2.4 GHz during the learn pass. Ideally pick a variant with an external antenna (u.FL connector).
-- USB power for each node (wall chargers or power banks)
-- A phone stand or tripod (for the optional teacher pass)
-- Printed AprilTags (iPhone) and a ChArUco board, printed from the app
+- **Required:** a WiFi router (any), a phone with a camera, a laptop that can stay in one place during learning and sensing
+- **Printed:** a few AprilTags and a lens-calibration grid (iPhone), printed from the app
+- **Helps, if you already have them:** other WiFi devices that stay put (smart TV, speaker, printer, mesh nodes) in different parts of the space; a USB WiFi adapter with monitor mode; any CSI-capable device
 
 ## Phases
 
-### 0. Repo scaffold
-- Move the existing code to `legacy/`, fix the README, add `requirements.txt`.
-- Layout: `firmware/csi_node/`, `server/`, `web/`, `ml/`, `docs/`.
+### 0. Repo scaffold (done)
+- Existing code moved to `legacy/`, README rewritten, Python and web layout in place.
 
-### 1. Web app, phone tracking and sync (no boards needed)
-- One command (`seefy`) starts the host: it serves the web app over HTTPS on the LAN and prints the URL and a QR code.
+### 1. Web app, phone tracking and sync (in progress)
+- One command (`seefy`) starts the host: HTTPS on the LAN, URL and QR code. *(done)*
+- Clock sync handshake, session recorder, accumulating tag map and lens calibration on the host. *(done, tested)*
 - Web app shell with the Live, Learn and Sensors screens.
-- Clock sync handshake and a live latency/sync readout.
-- Phone tracking: lens calibration, multi-room tag map, real-time 6DoF position streamed to the host; WebXR path on Android. Screen Wake Lock.
-- Session recorder.
+- Phone tracking: lens calibration, multi-room tag map, real-time 6DoF position streamed to the host. Screen Wake Lock.
 - **Done when:** walking between two rooms with the phone draws your path live on a top-down map on the laptop, under 100 ms behind, with a measured phone clock error under 5 ms.
 
 ### 2. Space map
 - Keyframe upload, metric depth, TSDF fusion, wall/floor/doorway extraction, room segmentation, furniture labels.
-- Floor-plan viewer with rooms and doorways.
-- Optional LingBot-Map refinement from the recorded walk.
 - **Done when:** a walk through 2–3 rooms gives a floor plan with walls within about 10 cm of tape-measured dimensions and correct room divisions.
 
-### 3. Node firmware and capture
-- Firmware: join the network from config, ping the gateway at about 100 Hz (mesh CSI), sniff frames from a MAC the host specifies (phone-link RSSI + CSI), node clock sync, binary UDP to the host.
-- Host: UDP ingest, finding the phone's MAC from its IP, per-node packet rates, live waterfall.
-- **Done when:** with the phone streaming, every node reports phone-link packets at 30 Hz or more, and the mesh waterfall clearly reacts to someone walking.
+### 3. Signal capture
+- Capability probe: which tiers this laptop supports, shown on the Sensors screen.
+- Tier 0 adapter: link RSSI at the highest rate the OS allows. Measure the real rate on the test Mac.
+- Tier 1 adapter: monitor-mode sniffer with per-transmitter RSSI, transmitter discovery and fixed-device marking. Test whether the Mac keeps its connection while sniffing.
+- Live per-link signal view.
+- **Done when:** on the test setup, the link view clearly reacts to someone walking between the router and the laptop, and every available tier reports its real sample rate.
 
 ### 4. Learn pass and radio map
 - Guided multi-room walk with baseline capture, coverage heatmap and quality warnings.
-- Everything aligned on one timeline: phone position, body position, phone-link signal, mesh CSI, space map.
-- Radio-map viewer: signal per node over the floor plan.
-- Automatic node-position solve with confidence scores.
-- **Done when:** a learn pass over 2–3 rooms gives a dense, aligned dataset with good coverage in every room.
+- Everything on one timeline: phone position, body position, per-link signals, space map.
+- Radio-map viewer per link, with blind-spot hints.
+- **Done when:** a learn pass gives an aligned dataset and the radio map shows which areas each link covers.
 
-### 5. Model v1: where and how people move
-- Preprocessing: phase sanitization (remove the linear phase slope across subcarriers), Hampel outlier filter, amplitude normalized against the empty-space baseline.
-- Model: mesh CSI window from all nodes → per-node conv encoder → fusion → temporal transformer → heads for occupancy per room, floor position, heading/speed and movement type. Confident node positions and the space map go in as context. Space-map limits go into the loss and a live tracker (particle filter over the floor plan, crossing rooms only through doorways). The legacy modality-translation MLP is a starting point for the encoder.
-- Eval on held-out walks: room accuracy, position error in cm, movement-type accuracy.
-- **Done when:** with no camera anywhere, the Live screen shows the right room more than 95% of the time and tracks a walking person to within about 50 cm in real time.
+### 5. Model v1: motion and zones
+- Preprocessing per link: baseline subtraction, outlier filter, variance features over short windows.
+- Model: signal windows from all fixed links → per-link encoder → fusion → heads for motion, zone/room and (when supported) floor position. Space-map limits go into the loss and a live tracker over the floor plan.
+- Eval on held-out walks: motion detection accuracy, room accuracy, position error where applicable, reported per tier.
+- **Done when:** on the test setup, with no camera, motion detection is reliable and the Live screen shows the right zone most of the time.
 
-### 6. Model v2: skeletons
-- Teacher pass in chosen rooms. Same encoder, plus a keypoint head in room coordinates, initialized from v1.
-- **Done when:** in a taught room, with the camera covered, the WiFi skeleton follows a walking person in real time.
+### 6. CSI tier (optional)
+- CSI adapters for common CSI-capable hardware, skeleton head and teacher pass, for users who have such hardware.
 
 ### 7. Stretch goals
 - More than one person at a time
-- Ray-traced CSI simulation (Sionna RT) on the space map: synthetic pretraining and node-placement suggestions
+- Ray-traced simulation (Sionna RT) on the space map: synthetic pretraining and "put a device here" suggestions
 - Change detection with per-room "relearn" prompts
-- Dense body-surface output (DensePose-style), as in the paper
-- AR overlay on the phone camera view, showing people in neighboring rooms where they really are
+- AR overlay on the phone camera view, showing motion in neighboring rooms
 
 ## Risks
 
-- **Signal detail:** ESP32 CSI is noisier and has fewer antennas than the paper's Intel 5300 setup. Several nodes per room make up for some of that, but expect positions and skeletons, not full body surfaces.
-- **One person, one posture during the walk:** the walk mostly shows one person, upright, holding a phone. Movement variety in the walk, teacher passes and extra sessions (other people, other postures) widen what the model knows.
-- **The phone's own effect:** during the walk, both the person and the phone change the signal. The model uses only mesh CSI as input so it doesn't come to rely on a phone being present.
-- **Phone band:** see Hardware. A 2.4 GHz-only node can't hear a phone on 5 GHz.
-- **Tracking gaps (iPhone):** losing sight of every tag pauses labeling. The coverage map shows gaps; add a tag there. LingBot-Map refinement can fill gaps afterwards.
+- **Coarse signals:** RSSI mostly sees bodies that block or move near a link's direct path. With one link (tier 0), expect motion detection only. That's the honest baseline for a stock setup.
+- **Mac monitor mode (untested):** sniffing on macOS needs admin rights and may disconnect the Mac from WiFi while active, which would cut the phone off from the host. Fallbacks: connect the Mac by Ethernet, use a USB WiFi adapter for sniffing, or stay on tier 0.
+- **macOS link-RSSI rate (untested):** CoreWLAN may update slowly or need Location permission. Measure it in Phase 3.
+- **Mesh routers:** with several mesh nodes, devices may sit on different nodes or channels, and the laptop hears only its own channel. Each node the laptop hears becomes an extra link.
+- **Router-reported RSSI (unverified):** may not exist, or may update only every few seconds.
+- **Few fixed transmitters:** homes with only a router get one or two links. The app should say so and suggest where an extra fixed device would help.
+- **One person, one posture during the walk:** movement variety and extra passes widen what the model knows.
 - **Still people:** WiFi sees motion, so long-motionless people fade. The tracker holds their last position.
-- **Packet rate:** some routers rate-limit pings. If needed, fall back to UDP echo traffic or a node acting as its own access point.
-- **Relearning:** moving nodes, the router or major furniture changes the space. Learning is per room, so only the changed room needs a new walk.
-- **Wall material:** drywall is fine. Brick and concrete weaken the signal a lot; add nodes on each side.
+- **Relearning:** moving the laptop, the router or another fixed device changes the links. Learning is per room, so only affected rooms need a new walk.
 - **Privacy:** only sense spaces you're allowed to. Data stays on your machines.
 
 ## Open questions
 
-1. Which phone? iPhone needs a few printed tags per room for tracking; Android Chrome can track with none.
-2. Is this Mac (M1 Pro, 16 GB) the host? Everything in the default path runs on it.
-3. How big is the first test space (how many rooms)? That sets the node count.
-4. Ready to order ESP32-C5 boards?
+1. Does Mac monitor mode keep the WiFi connection on the test MacBook? This decides tier 0 vs tier 1 for the first test.
+2. Which other fixed WiFi devices are in the test space, and where?
+3. How many rooms does the first test cover?
