@@ -1,0 +1,23 @@
+/* WiFi movement card (Live side panel). Builds on .side-card / .side-head / .badge / .stats from style.css. */
+
+:root {
+  --wifi-moving-fill: rgba(255, 149, 0, 0.16);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --wifi-moving-fill: rgba(255, 159, 10, 0.2);
+  }
+}
+
+.wifi-state {
+  font-size: 30px; font-weight: 700; letter-spacing: -0.02em; line-height: 1.1; margin: 2px 0 10px;
+  color: var(--muted); transition: color 0.2s;
+}
+.wifi-card.still .wifi-state { color: var(--ok); }
+.wifi-card.moving .wifi-state { color: var(--warn); }
+.wifi-card.moving { box-shadow: inset 0 0 0 1.5px var(--warn); }
+
+.wifi-spark { display: block; width: 100%; height: 56px; margin-bottom: 10px; background: var(--fill); border-radius: 6px; }
+.wifi-card .stats { margin-bottom: 4px; }
+.wifi-card .bad { color: var(--danger); font-size: 13px; }
+.wifi-calibrate { margin-top: 10px; }
