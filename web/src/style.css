@@ -264,28 +264,67 @@ input[type="checkbox"] { min-height: 0; width: 22px; height: 22px; accent-color:
 /* ---- live ---------------------------------------------------------------- */
 
 .live { display: grid; grid-template-columns: 1fr 300px; gap: 16px; height: calc(100vh - 200px); min-height: 420px; }
-.stage { position: relative; min-height: 0; }
+.stage { position: relative; min-height: 0; min-width: 0; }
 .map { width: 100%; height: 100%; background: #14396b; border-radius: var(--radius); display: block; }
 .map[hidden] { display: none; }
 .map3d { overflow: hidden; background: var(--card); }
 .map3d canvas { width: 100% !important; height: 100% !important; display: block; touch-action: none; }
 .segs.floating {
   position: absolute; top: 12px; left: 50%; transform: translateX(-50%); z-index: 2; margin: 0;
-  background: rgba(118, 118, 128, 0.24); padding: 2px; border-radius: 9px;
-  -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px);
+  /* A dark glass pill, so it reads the same on the blue blueprint and on a light or dark 3D view. */
+  background: rgba(28, 28, 30, 0.72); padding: 2px; border-radius: 9px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.18), inset 0 0 0 0.5px rgba(255, 255, 255, 0.12);
+  -webkit-backdrop-filter: blur(16px) saturate(160%); backdrop-filter: blur(16px) saturate(160%);
 }
-.segs.floating .seg { min-height: 30px; padding: 0 16px; border-radius: 7px; background: transparent; color: #fff; font-size: 13px; }
-.segs.floating .seg.on { background: #fff; color: #000; box-shadow: 0 1px 3px rgba(0,0,0,0.2); }
+.segs.floating .seg { min-height: 30px; padding: 0 16px; border-radius: 7px; background: transparent; color: rgba(255, 255, 255, 0.85); font-size: 13px; }
+.segs.floating .seg:hover:not(.on) { color: #fff; }
+.segs.floating .seg.on { background: #fff; color: #000; box-shadow: 0 1px 3px rgba(0,0,0,0.25); }
 .segs { display: flex; }
-.side { overflow: auto; }
+.side { overflow: auto; display: flex; flex-direction: column; gap: 12px; align-content: start; }
+.side > h3 { margin: 6px 4px -6px; }
+.side > p, .side > div:not(.card):not(.side-card) { margin: 0; padding: 12px 14px; background: var(--card); border-radius: var(--radius); font-size: 15px; }
+.side > div:empty { display: none; }
+.side .card.small { margin: 0; }
+.side > button { align-self: flex-start; }
+.side-card { background: var(--card); border-radius: var(--radius); padding: 14px 16px; font-size: 15px; }
+.side-card h3 { margin: 0; }
+.side-card p { margin: 6px 0 0; }
+.side-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+.side-card .stats { font-size: 14px; }
+.side-card.rec-card { box-shadow: inset 0 0 0 1.5px var(--danger); }
+.big-num { font-size: 28px; font-weight: 700; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+.badge.ok { color: var(--ok); background: color-mix(in srgb, var(--ok) 15%, transparent); }
+.badge.off { color: var(--muted); background: var(--fill); }
+.device-row { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-top: 0.5px solid var(--line); }
+.device-row:first-of-type { border-top: none; }
+.device-row > div:nth-child(2) { flex: 1; min-width: 0; }
+.device-row .muted { font-size: 13px; }
+.device-metrics { text-align: right; font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .rec { color: var(--danger); font-weight: 600; }
 @media (max-width: 760px) {
-  .live { grid-template-columns: 1fr; grid-template-rows: 60vh auto; height: auto; }
+  .live { grid-template-columns: minmax(0, 1fr); grid-template-rows: 60vh auto; height: auto; }
 }
 
 /* ---- details ------------------------------------------------------------- */
 
 .connect { display: flex; gap: 16px; align-items: center; }
+.device-list { display: flex; flex-direction: column; }
+.device { display: flex; align-items: center; gap: 12px; padding: 12px 0; border-top: 0.5px solid var(--line); flex-wrap: wrap; }
+.device:first-child { border-top: none; padding-top: 4px; }
+.device-icon {
+  width: 36px; height: 36px; border-radius: 9px; flex: none; display: grid; place-items: center;
+  background: var(--fill); color: var(--muted);
+}
+.device-icon.phone { background: color-mix(in srgb, var(--accent) 15%, transparent); color: var(--accent); }
+.device-icon svg { width: 20px; height: 20px; }
+.device-name { display: flex; flex-direction: column; gap: 1px; min-width: 160px; flex: 1; }
+.device-name b { font-weight: 600; font-size: 15px; display: flex; align-items: center; gap: 8px; }
+.device-name .muted { font-size: 13px; }
+.this { font-size: 11px; font-weight: 600; color: var(--muted); background: var(--fill); padding: 1px 7px; border-radius: 6px; }
+.metrics { display: flex; flex-wrap: wrap; gap: 6px 22px; }
+.metric { display: flex; flex-direction: column; min-width: 64px; }
+.metric span { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.02em; }
+.metric b { font-size: 14px; font-weight: 500; font-variant-numeric: tabular-nums; }
 .connect img { background: #fff; border-radius: 8px; flex: none; }
 .table-wrap { overflow-x: auto; }
 table { border-collapse: collapse; width: 100%; font-size: 13px; }
@@ -340,7 +379,7 @@ th { color: var(--muted); font-weight: 500; }
 
 /* ---- desktop: macOS-style sidebar instead of a bottom tab bar ------------- */
 
-.brand { display: none; }
+.brand, .status { display: none; }
 
 @media (min-width: 900px) {
   :root { --sidebar: #ebebf0; }
@@ -358,7 +397,22 @@ th { color: var(--muted); font-weight: 500; }
     border-top: none;
     border-right: 0.5px solid var(--line);
   }
-  .brand { display: block; font-size: 20px; font-weight: 700; letter-spacing: -0.02em; padding: 6px 12px 18px; }
+  .brand { display: flex; align-items: center; gap: 10px; font-size: 19px; font-weight: 700; letter-spacing: -0.02em; padding: 4px 12px 20px; }
+  .brand-mark {
+    width: 26px; height: 26px; border-radius: 7px; flex: none;
+    background: radial-gradient(circle at 50% 50%, #fff 0 4px, transparent 4.5px), linear-gradient(160deg, #3b8cff, #0a5ce0);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2), inset 0 0 0 0.5px rgba(255, 255, 255, 0.25);
+  }
+  .status {
+    display: flex; align-items: center; gap: 10px; margin-top: auto; padding: 10px 12px;
+    border-radius: 10px; background: color-mix(in srgb, var(--fg) 5%, transparent); font-size: 13px;
+  }
+  .status > div { display: flex; flex-direction: column; min-width: 0; }
+  .status b { font-weight: 600; }
+  .status span:not(.dot) { color: var(--muted); font-size: 12px; }
+  .status .dot { width: 8px; height: 8px; }
+  .status.on .dot { background: var(--ok); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 25%, transparent); }
+  .title-row .dot { display: none; }
   .tab {
     flex: none;
     max-width: none;
@@ -377,10 +431,11 @@ th { color: var(--muted); font-weight: 500; }
   .tab:hover:not(.on) { background: var(--fill); }
   .icon svg { width: 19px; height: 19px; }
 
-  .nav-bar { padding: 36px 48px 6px; }
-  .title-row { margin: 0; max-width: 1040px; }
-  .large-title { font-size: 30px; }
-  main { margin: 0; max-width: 1136px; padding: 10px 48px 48px; }
+  .nav-bar { padding: 28px 40px 4px; }
+  .title-row { margin: 0; max-width: none; }
+  .large-title { font-size: 26px; }
+  main { margin: 0; max-width: 1280px; padding: 12px 40px 40px; }
+  body[data-screen="live"] main { max-width: none; padding-bottom: 24px; }
 
   button { min-height: 34px; font-size: 15px; }
   button.primary { width: auto; min-height: 40px; padding: 0 22px; margin: 10px 0 4px; }
@@ -394,10 +449,32 @@ th { color: var(--muted); font-weight: 500; }
   .step-title:hover { background: color-mix(in srgb, var(--fill) 50%, transparent); }
   .step-body .camera { margin-left: 0; max-width: 520px; }
 
-  .live { height: calc(100vh - 130px); grid-template-columns: 1fr 320px; }
-  .sensors { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; align-items: start; }
-  .sensors .card { margin: 0; }
-  .sensors .card:nth-child(2), .sensors .card:last-child { grid-column: 1 / -1; }
+  .live { height: calc(100vh - 106px); min-height: 480px; grid-template-columns: 1fr 340px; gap: 20px; }
+  .map { border-radius: 12px; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08), 0 0 0 0.5px var(--line); }
+
+  .sensors {
+    display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; align-items: start;
+    grid-template-areas: "connect tagmap" "devices devices" "passes signal" "settings settings";
+  }
+  .sensors .card { margin: 0; padding: 16px 20px; }
+  .sensors .connect { grid-area: connect; align-self: stretch; }
+  .sensors .tagmap-card { grid-area: tagmap; align-self: stretch; }
+  .sensors .devices-card { grid-area: devices; }
+  .sensors .passes-card { grid-area: passes; }
+  .sensors .signal-card { grid-area: signal; }
+  .sensors .settings-card { grid-area: settings; }
+  .settings-card > .muted { max-width: 720px; }
+  .setting-group { border: 0.5px solid var(--line); border-radius: 10px; padding: 0 16px; margin-bottom: 10px; }
+  .setting-group[open] { padding-bottom: 6px; }
+  .setting-group summary:hover { color: var(--accent); }
+  .setting-group > .setting + .setting { border-top: 0.5px solid var(--line); }
+  .settings > .row {
+    position: sticky; bottom: 0; margin: 0 -20px -16px; padding: 12px 20px;
+    background: color-mix(in srgb, var(--card) 88%, transparent);
+    -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px);
+    border-top: 0.5px solid var(--line); border-radius: 0 0 var(--radius) var(--radius);
+  }
+  .settings > .row button.primary { margin: 0; }
   .setting-group > .setting { max-width: 760px; }
 }
 

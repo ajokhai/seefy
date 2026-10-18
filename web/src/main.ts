@@ -23,13 +23,18 @@ const aliases: Record<string, Name> = { learn: "guide", sensors: "details" };
 const title = h("h1", { class: "large-title" });
 const connDot = h("span", { class: "dot", title: "Connection to the Seefy server" });
 const main = h("main");
+// On desktop the sidebar says what the dot means: connected or not, and who else is here.
+const statusText = h("b", {}, "Connecting…");
+const statusSub = h("span", {}, "");
+const status = h("div", { class: "status" }, h("span", { class: "dot" }), h("div", {}, statusText, statusSub));
 const tabs = (Object.keys(screens) as Name[]).map((name) =>
   h("a", { href: `#${name}`, class: "tab" }, icon(screens[name].icon), h("span", {}, screens[name].title)),
 );
 document.body.append(
   h("header", { class: "nav-bar" }, h("div", { class: "title-row" }, title, connDot)),
   main,
-  h("nav", { class: "tab-bar" }, h("div", { class: "brand" }, "seefy"), ...tabs),
+  h("nav", { class: "tab-bar" },
+    h("div", { class: "brand" }, h("span", { class: "brand-mark" }), "seefy"), ...tabs, status),
 );
 
 let current: { destroy: () => void } | null = null;
@@ -46,8 +51,19 @@ function route(): void {
   tabs.forEach((t) => t.classList.toggle("on", t.getAttribute("href") === `#${name}`));
 }
 
-conn.on("open", () => connDot.classList.add("on"));
-conn.on("close", () => connDot.classList.remove("on"));
+const setOnline = (on: boolean) => {
+  connDot.classList.toggle("on", on);
+  status.classList.toggle("on", on);
+  statusText.textContent = on ? "Connected" : "Offline";
+  if (!on) statusSub.textContent = "Reconnecting to the server";
+};
+conn.on("open", () => setOnline(true));
+conn.on("close", () => setOnline(false));
+conn.on("state", (m) => {
+  const ds: any[] = m.devices ?? [];
+  const phones = ds.filter((d) => d.role === "phone").length;
+  statusSub.textContent = phones ? `${phones} phone${phones > 1 ? "s" : ""} connected` : "No phone yet";
+});
 // Screens read conn state when built, so build the first one once the host has said hello.
 let first = true;
 conn.on("welcome", () => {
