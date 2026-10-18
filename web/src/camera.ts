@@ -1,6 +1,7 @@
 // Full-screen camera with floating controls (close, status, hint, shutter), in the style of
 // camera apps like Snapchat. Used by both the markerless scan and tag tracking.
 
+import "./camera.css";
 import { h } from "./ui";
 
 export interface CameraSheet {
@@ -11,6 +12,10 @@ export interface CameraSheet {
   setHint(text: string): void;
   setShutter(state: "idle" | "recording" | "busy" | "hidden"): void;
   setCorner(content: HTMLElement | null): void;
+  /** Coverage bar: fill 0..1, a marker where "enough" is, and a label. Hidden when fill is null. */
+  setProgress(fill: number | null, enoughAt: number, label: string, level?: "short" | "enough" | "extra"): void;
+  /** Turn-speed meter: current speed as a fraction of the limit (1 = at the limit). */
+  setMeter(frac: number | null, label?: string): void;
   close(): void;
 }
 
@@ -20,13 +25,20 @@ export function openCameraSheet(opts: { onShutter?: () => void; onClose?: () => 
   const status = h("div", { class: "cam-status" });
   const hint = h("div", { class: "cam-hint" });
   const corner = h("div", { class: "cam-corner" });
+  const progFill = h("div", { class: "cam-prog-fill" });
+  const progMark = h("div", { class: "cam-prog-mark" });
+  const progLabel = h("div", { class: "cam-prog-label" });
+  const prog = h("div", { class: "cam-prog" }, h("div", { class: "cam-prog-track" }, progFill, progMark), progLabel);
+  const meterFill = h("div", { class: "cam-meter-fill" });
+  const meterLabel = h("span", { class: "cam-meter-label" });
+  const meter = h("div", { class: "cam-meter" }, h("div", { class: "cam-meter-track" }, meterFill, h("div", { class: "cam-meter-limit" })), meterLabel);
   const shutter = h("button", { class: "cam-shutter", "aria-label": opts.shutterLabel ?? "Record" }, h("span"));
   const closeBtn = h("button", { class: "cam-close", "aria-label": "Close camera" }, "✕");
 
   const el = h("div", { class: "cam-sheet" },
     video, overlay,
-    h("div", { class: "cam-top" }, closeBtn, status, h("span", { class: "cam-spacer" })),
-    h("div", { class: "cam-bottom" }, hint, h("div", { class: "cam-controls" }, corner, shutter, h("span", { class: "cam-spacer" }))),
+    h("div", { class: "cam-top" }, closeBtn, h("div", { class: "cam-top-mid" }, status, meter), h("span", { class: "cam-spacer" })),
+    h("div", { class: "cam-bottom" }, prog, hint, h("div", { class: "cam-controls" }, corner, shutter, h("span", { class: "cam-spacer" }))),
   );
   document.body.append(el);
   document.body.classList.add("cam-open");
@@ -51,6 +63,22 @@ export function openCameraSheet(opts: { onShutter?: () => void; onClose?: () => 
     setCorner(content) {
       corner.replaceChildren(...(content ? [content] : []));
     },
+    setProgress(fill, enoughAt, label, level = "short") {
+      prog.hidden = fill == null;
+      if (fill == null) return;
+      progFill.style.width = `${Math.round(Math.min(1, Math.max(0, fill)) * 100)}%`;
+      progMark.style.left = `${Math.round(enoughAt * 100)}%`;
+      progLabel.textContent = label;
+      prog.className = `cam-prog ${level}`;
+    },
+    setMeter(frac, label = "") {
+      meter.hidden = frac == null;
+      if (frac == null) return;
+      // The limit sits at 50% of the track, so up to twice the limit is visible.
+      meterFill.style.width = `${Math.round(Math.min(1, frac / 2) * 100)}%`;
+      meter.className = `cam-meter ${frac > 2 ? "bad" : frac > 1 ? "warn" : "ok"}`;
+      meterLabel.textContent = label;
+    },
     close() {
       if (closed) return;
       closed = true;
@@ -65,6 +93,8 @@ export function openCameraSheet(opts: { onShutter?: () => void; onClose?: () => 
   };
   sheet.setStatus("");
   sheet.setHint("");
+  sheet.setProgress(null, 0.7, "");
+  sheet.setMeter(null);
   sheet.setShutter(opts.onShutter ? "idle" : "hidden");
   return sheet;
 }

@@ -62,17 +62,24 @@ DEFAULTS: dict[str, dict[str, Any]] = {
         "stand_pose_average_s": 2.0,
     },
     "scan": {
-        "capture_fps": 5,  # frames per second sent from the phone while scanning
+        "capture_fps": 8,  # frames per second sent from the phone while scanning
+        "max_turn_deg_per_frame": 5.0,  # turning more than this between frames breaks the map (measured on real scans)
         "capture_max_side": 1280,  # longest frame side in pixels
         "jpeg_quality": 0.85,
         "camera_model": "SIMPLE_RADIAL",  # COLMAP lens model; OPENCV for stronger distortion
-        "max_image_size": 1024,  # frames are downscaled to this for feature extraction
-        "max_features": 4096,  # SIFT features per frame; more = slower, more robust
-        "match_overlap": 10,  # each frame is matched with this many neighbours in time
+        "focal_prior_factor": 0.7,  # starting focal length = this x the frame's long side (typical phone main camera)
+        "max_image_size": 1280,  # frames are downscaled to this for feature extraction
+        "max_features": 8192,  # SIFT features per frame; more = slower, more robust
+        "match_overlap": 20,  # each frame is matched with this many neighbours in time
+        "min_matches": 10,  # matches needed to link two frames; lower links weak frames, risks errors
+        "init_min_inliers": 50,  # agreeing matches needed to start the map
+        "register_min_inliers": 15,  # agreeing matches needed to add a frame to the map
         "floor_percentile": 3.0,  # floor height = this percentile of point heights below the cameras
         "camera_height_m": 1.35,  # assumed phone height while scanning; sets scale until measured
         "imu_min_correlation": 0.5,  # accelerometer scale is used only if it agrees with the camera this well
         "max_points": 20000,  # points kept for the room view
+        "live_interval_s": 3.0,  # how often the map is extended while scanning
+        "live_min_new_frames": 10,  # extend the map once this many new frames have arrived
     },
     "learn": {
         "baseline_s": 30,  # empty-space capture before a walk
@@ -150,17 +157,24 @@ class Config:
 DOCS: dict[str, dict[str, tuple]] = {
     "scan": {
         "_": ("Room scan", "The default way to map a room: no markers. Affects how the phone records and how the laptop builds the map."),
-        "capture_fps": ("Frames per second", "How many camera frames the phone sends while scanning. More helps fast movement but takes longer to process.", "fps"),
+        "capture_fps": ("Frames per second", "How many camera frames the phone sends while scanning. More lets you turn faster but takes longer to process.", "fps"),
+        "max_turn_deg_per_frame": ("Turn limit per frame", "The camera only sends a few frames a second; turning more than this between two frames breaks the map. The safe turn speed is this times the frame rate.", "°"),
         "capture_max_side": ("Frame size", "Longest side of each frame sent. Bigger shows more detail but uploads and processes slower.", "px"),
         "jpeg_quality": ("Image quality", "JPEG quality of uploaded frames, 0 to 1. Lower uploads faster but loses fine detail.", ""),
+        "focal_prior_factor": ("Lens starting guess", "Starting focal length as a fraction of the frame's long side, used when the phone has no lens calibration. 0.7 fits most phone main cameras.", "×"),
         "camera_model": ("Lens model", "How lens distortion is modelled. SIMPLE_RADIAL suits phone main cameras; OPENCV for wide lenses.", ""),
         "max_image_size": ("Processing size", "Frames are shrunk to this before finding features. Larger is more precise and slower.", "px"),
         "max_features": ("Features per frame", "How many distinctive points (corners, edges, lights) are kept per frame. More is sturdier in plain rooms, but slower.", ""),
         "match_overlap": ("Frames compared", "Each frame is compared with this many frames before and after it. Raise it if scans break apart.", "frames"),
+        "min_matches": ("Matches to link frames", "How many matching points two frames need before they're linked. Lower keeps weak frames, but can link wrong ones.", ""),
+        "init_min_inliers": ("Matches to start the map", "How many consistent matches the first two frames need to start the map.", ""),
+        "register_min_inliers": ("Matches to add a frame", "How many consistent matches a frame needs to be placed in the map. Lower places more frames in plain rooms.", ""),
         "floor_percentile": ("Floor detection", "The floor is placed at this low percentile of point heights. Raise it if the floor comes out too low.", "%"),
         "camera_height_m": ("Phone height (fallback)", "Assumed height of the phone during the scan. Only used for scale when the accelerometer fit fails.", "m"),
         "imu_min_correlation": ("Accelerometer agreement", "How well the accelerometer must match the camera motion before it's trusted for scale (0 to 1).", ""),
         "max_points": ("Points shown", "How many map points are kept for the room view.", ""),
+        "live_interval_s": ("Live map interval", "How often the map is extended while you scan. Shorter is more responsive but uses more of the laptop.", "s"),
+        "live_min_new_frames": ("Frames per live update", "The map is extended once this many new frames have arrived.", "frames"),
     },
     "tracking": {
         "_": ("Tag tracking (optional)", "Only used if you place tags (printed or shown on screens) for live, extra-accurate tracking."),
@@ -221,3 +235,10 @@ DOCS: dict[str, dict[str, tuple]] = {
         "target_samples_per_cell": ("Samples per square", "When a floor square counts as covered.", ""),
     },
 }
+
+
+# The scan-coverage thresholds live with their scoring code; expose them as a normal settings section.
+from .coverage import DEFAULTS as _COVERAGE_DEFAULTS, DOCS as _COVERAGE_DOCS  # noqa: E402
+
+DEFAULTS["coverage"] = dict(_COVERAGE_DEFAULTS)
+DOCS["coverage"] = dict(_COVERAGE_DOCS)

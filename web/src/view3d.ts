@@ -5,6 +5,7 @@
 
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
+import { layoutGroup } from "./layout3d";
 
 const toThree = (p: number[]) => new THREE.Vector3(p[0], p[2], -p[1]);
 
@@ -55,7 +56,9 @@ export class View3D {
     this.camera.updateProjectionMatrix();
   }
 
-  setScan(result: any): void {
+  private framed = false;
+
+  setScan(result: any, keepView = false): void {
     this.room.clear();
     const pts: number[][] = (result?.points ?? []).filter((q: number[]) => q[2] > -0.2 && q[2] < 3);
     const dark = matchMedia("(prefers-color-scheme: dark)").matches;
@@ -99,7 +102,11 @@ export class View3D {
         .computeLineDistances());
     }
 
+    if (result?.layout?.ok) this.room.add(layoutGroup(result.layout, dark));
+
     // Look at the room from a raised corner.
+    if (keepView && this.framed) return;
+    this.framed = true;
     const cx = (x0 + x1) / 2;
     const cy = (y0 + y1) / 2;
     const span = Math.max(x1 - x0, y1 - y0, 3);

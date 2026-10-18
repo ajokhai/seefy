@@ -11,7 +11,7 @@ from pathlib import Path
 import qrcode
 import qrcode.image.svg
 from fastapi import Body, FastAPI, HTTPException, Request, WebSocket
-from fastapi.responses import HTMLResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from .config import DOCS, Config
@@ -134,8 +134,10 @@ def create_app(data: Path, public_url: str = "") -> FastAPI:
     @app.post("/api/scans/start")
     async def scan_start(body: dict = Body(default={})):
         s = scans.start(str(body.get("device", ""))[:64])
+        s.lens = lens.get(str(body.get("device", ""))[:64])
         metrics.event("scan_start", id=s.id, device=body.get("device"))
         await hub.broadcast({"type": "scan", "id": s.id, "status": "recording"})
+        asyncio.create_task(live_mapping(s))
         return {"id": s.id, "settings": cfg["scan"]}
 
     @app.post("/api/scans/{sid}/frame")
@@ -156,6 +158,33 @@ def create_app(data: Path, public_url: str = "") -> FastAPI:
         await hub.broadcast({"type": "scan", "id": sid, "status": "queued", "frames": s.count})
         return meta
 
+    @app.post("/api/scans/{sid}/reprocess")
+    async def scan_reprocess(sid: str):
+        """Rebuild a scan's map from its saved frames, e.g. after changing settings."""
+        s = scans.get(sid)
+        if not s or s.meta().get("status") in ("recording", "queued", "processing"):
+            raise HTTPException(409, "scan is busy or missing")
+        s.mapper = None  # start the map from scratch with the current settings
+        s.lens = lens.get(s.meta().get("device", ""))
+        s.update_meta(status="queued")
+        metrics.event("scan_reprocess", id=sid)
+        asyncio.create_task(process_scan(s))
+        await hub.broadcast({"type": "scan", "id": sid, "status": "queued", "frames": s.count})
+        return s.meta()
+
+    async def live_mapping(s) -> None:
+        """Extend the map every few seconds while the phone is still recording."""
+        while s.meta().get("status") == "recording":
+            await asyncio.sleep(cfg["scan"]["live_interval_s"])
+            if s.meta().get("status") != "recording":
+                break
+            async with processing:
+                live = await asyncio.to_thread(s.live_update, cfg["scan"], cfg["coverage"])
+            if live:
+                metrics.event("scan_live", id=s.id, **{k: live.get(k) for k in ("registered", "frames", "update_s")},
+                              level=(live.get("coverage") or {}).get("level"))
+                await hub.broadcast({"type": "scan", "id": s.id, "status": "recording", "live": live})
+
     async def process_scan(s) -> None:
         loop = asyncio.get_running_loop()
 
@@ -164,9 +193,9 @@ def create_app(data: Path, public_url: str = "") -> FastAPI:
                 {"type": "scan", "id": s.id, "status": "processing", "stage": stage, "progress": frac}), loop)
 
         async with processing:
-            result = await asyncio.to_thread(s.process, cfg["scan"], progress)
+            result = await asyncio.to_thread(s.process, cfg["scan"], progress, cfg["coverage"])
         summary = {k: result.get(k) for k in ("ok", "error", "registered", "total", "scale_method", "up_method",
-                                              "room_size_m", "timings_s")}
+                                              "room_size_m", "timings_s", "coverage")}
         metrics.event("scan_processed", id=s.id, **summary)
         await hub.broadcast({"type": "scan", "id": s.id, "status": "done" if result["ok"] else "failed", **summary})
 
@@ -177,6 +206,21 @@ def create_app(data: Path, public_url: str = "") -> FastAPI:
     @app.get("/api/scans/latest")
     def scan_latest():
         return scans.latest_result() or {}
+
+    @app.get("/api/scans/{sid}/frames/{name}")
+    def scan_frame_image(sid: str, name: str):
+        s = scans.get(sid)
+        path = s.frame_path(name) if s else None
+        if not path:
+            raise HTTPException(404, "no such frame")
+        return FileResponse(path, media_type="image/jpeg")
+
+    @app.get("/api/scans/{sid}/live")
+    def scan_live(sid: str):
+        s = scans.get(sid)
+        if not s:
+            raise HTTPException(404, "no such scan")
+        return s.live() or {}
 
     @app.get("/api/scans/{sid}")
     def scan_get(sid: str):

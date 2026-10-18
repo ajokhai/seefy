@@ -6,7 +6,7 @@
 
 import { openCameraSheet, requestMotionPermission, type CameraSheet } from "./camera";
 import { conn, isTouch } from "./conn";
-import { ScanRecorder } from "./scan";
+import { ScanRecorder, type ScanStats } from "./scan";
 import { Tracker, type FrameResult } from "./tracker";
 import { fmt, h, toast } from "./ui";
 
@@ -89,8 +89,15 @@ export function guideScreen(): { el: HTMLElement; destroy: () => void } {
     } catch {
       /* fine without */
     }
-    const rec = { r: null as ScanRecorder | null };
+    const rec = { r: null as ScanRecorder | null, live: null as any };
+    const offLive = conn.on("scan", (m) => {
+      if (rec.r && m.id === rec.r.id && m.live) {
+        rec.live = m.live;
+        coach(sheet, rec.r.stats, rec.live);
+      }
+    });
     const finish = () => {
+      offLive();
       stream.getTracks().forEach((t) => t.stop());
       wake?.release?.();
     };
@@ -99,10 +106,10 @@ export function guideScreen(): { el: HTMLElement; destroy: () => void } {
       onShutter: async () => {
         if (!rec.r) {
           rec.r = new ScanRecorder(sheet.video);
-          rec.r.onStats = (s) => coach(sheet, s);
+          rec.r.onStats = (s) => coach(sheet, s, rec.live);
           sheet.setShutter("recording");
           await rec.r.start();
-          if (!(await motionAllowed)) toast("Motion sensors are off, so scale will be estimated less accurately.");
+          if (!(await motionAllowed)) toast("Motion sensors are off, so turn speed and scale can't be measured.");
         } else {
           sheet.setShutter("busy");
           sheet.setHint("Finishing upload…");
@@ -129,19 +136,36 @@ export function guideScreen(): { el: HTMLElement; destroy: () => void } {
     sheet.video.srcObject = stream;
     sheet.video.play().catch(() => {});
     sheet.setStatus("Ready");
-    sheet.setHint("Hold the phone upright at chest height. Tap the button and walk slowly around the room.");
+    sheet.setHint("Hold the phone upright at chest height. Tap the button, then walk slowly along the walls.");
   }
 
-  function coach(sheet: CameraSheet, s: { seconds: number; frames: number; dropped: number; turnRate: number; brightness: number; motion: boolean }) {
+  /** Live coaching on the camera: turn speed from the gyroscope (instant), coverage from the laptop's map. */
+  function coach(sheet: CameraSheet, s: ScanStats, live: any) {
+    const cfg = conn.config?.scan ?? {};
+    const limit = (cfg.max_turn_deg_per_frame ?? 5) * (cfg.capture_fps ?? 8);
     const m = Math.floor(s.seconds / 60);
     const sec = Math.floor(s.seconds % 60).toString().padStart(2, "0");
-    sheet.setStatus(`● ${m}:${sec} · ${s.frames} frames`, "rec");
+    if (s.motion) sheet.setMeter(s.turnRate / limit, `${Math.round(s.turnRate)}°/s`);
+
+    const cov = live?.coverage;
+    const enoughAt = conn.config?.coverage?.enough ?? 0.7;
+    if (cov && !cov.error) {
+      const words = { short: "Keep scanning", enough: "Enough ✓ You can stop", extra: "Extra sure ✓✓" } as Record<string, string>;
+      sheet.setProgress(cov.score, enoughAt, `${words[cov.level] ?? ""} · ${live.registered} of ${live.frames} frames placed`, cov.level);
+    } else {
+      sheet.setProgress(Math.min(0.15, s.frames / 400), enoughAt, `${s.frames} frames · building the map…`);
+    }
+    sheet.setStatus(`● ${m}:${sec}`, cov?.level === "enough" || cov?.level === "extra" ? "ok" : "rec");
+
+    // Most urgent first: things the phone can see right now, then the map's advice.
     if (s.brightness < 35) sheet.setHint("Too dark: turn on the lights.");
-    else if (s.turnRate > 110) sheet.setHint("Turn slower.");
-    else if (s.seconds < 15) sheet.setHint("Walk slowly. Point at each corner, the door and the windows.");
-    else if (s.seconds < 30) sheet.setHint("Tilt up at the ceiling lights now and then.");
-    else if (s.seconds < 45) sheet.setHint("Keep going until you've seen the whole room.");
-    else sheet.setHint("Covered the room? Tap the button to finish.");
+    else if (s.motion && s.turnRate > 2 * limit) sheet.setHint("Turn much slower: frames are being lost.");
+    else if (s.motion && s.turnRate > limit) sheet.setHint("Turn slower.");
+    else if (cov?.level === "extra") sheet.setHint("Room covered. Tap the button to finish.");
+    else if (cov?.level === "enough") sheet.setHint(`That's enough. ${cov.hints?.[0] ? `For extra margin: ${cov.hints[0].toLowerCase()}` : "Keep going for extra margin, or tap to finish."}`);
+    else if (cov?.hints?.length) sheet.setHint(cov.hints[0]);
+    else if (s.seconds < 8) sheet.setHint("Walk slowly along the walls, about a metre from them.");
+    else sheet.setHint("Keep walking along the walls. Tilt up at the ceiling now and then.");
   }
 
   // ---- full-screen camera: tags ----------------------------------------------
