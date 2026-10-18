@@ -29,7 +29,7 @@ const tabs = (Object.keys(screens) as Name[]).map((name) =>
 document.body.append(
   h("header", { class: "nav-bar" }, h("div", { class: "title-row" }, title, connDot)),
   main,
-  h("nav", { class: "tab-bar" }, ...tabs),
+  h("nav", { class: "tab-bar" }, h("div", { class: "brand" }, "seefy"), ...tabs),
 );
 
 let current: { destroy: () => void } | null = null;
