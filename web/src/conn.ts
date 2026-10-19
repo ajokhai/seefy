@@ -141,6 +141,8 @@ export class Conn {
         this.tagmap = msg.tagmap;
         this.lens = msg.lens;
         this.session = msg.session;
+        // Screens are built on welcome; give them the space now rather than after the next state broadcast.
+        this.state = { ...(this.state ?? {}), space: msg.space };
         break;
       case "pong":
         this.onPong(msg);

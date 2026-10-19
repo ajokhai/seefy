@@ -82,8 +82,10 @@ export function homeScreen(): { el: HTMLElement; destroy: () => void } {
 
   function drawHome() {
     const lay = map?.layout;
+    const pts: number[][] = map?.points ?? [];
     planEmpty.replaceChildren();
     planEmpty.hidden = !!lay?.ok;
+    planEmpty.classList.toggle("caption", !lay?.ok && pts.length > 0); // under the points, not over an empty box
     if (!lay?.ok) {
       const sp = conn.state?.space;
       planEmpty.append(h("p", {}, sp ? lay?.reason ?? "Your floor plan appears here." : "Map your space to see its floor plan here."),
@@ -99,7 +101,20 @@ export function homeScreen(): { el: HTMLElement; destroy: () => void } {
     const g = canvas.getContext("2d")!;
     g.setTransform(dpr, 0, 0, dpr, 0, 0);
     g.clearRect(0, 0, W, H);
-    if (!lay?.ok) return;
+    if (!lay?.ok) {
+      // No floor plan yet: show what the scans have seen so far, seen from above.
+      if (!pts.length) return;
+      const xs = pts.map((p) => p[0]).sort((a, b) => a - b);
+      const ys = pts.map((p) => p[1]).sort((a, b) => a - b);
+      const q = (a: number[], f: number) => a[Math.floor(f * (a.length - 1))];
+      const [x0, x1, y0, y1] = [q(xs, 0.02), q(xs, 0.98), q(ys, 0.02), q(ys, 0.98)];
+      const s = Math.min((W - 48) / Math.max(x1 - x0, 0.5), (H - 120) / Math.max(y1 - y0, 0.5));
+      const ox = (W - s * (x1 - x0)) / 2;
+      const oy = (H - 72 - s * (y1 - y0)) / 2;
+      g.fillStyle = getComputedStyle(document.documentElement).getPropertyValue("--scan-point") || "#888";
+      for (const p of pts) g.fillRect(ox + (p[0] - x0) * s, oy + (y1 - p[1]) * s, 1.5, 1.5);
+      return;
+    }
     const xs = lay.outline.map((p: number[]) => p[0]);
     const ys = lay.outline.map((p: number[]) => p[1]);
     const [x0, x1, y0, y1] = [Math.min(...xs), Math.max(...xs), Math.min(...ys), Math.max(...ys)];
@@ -119,10 +134,16 @@ export function homeScreen(): { el: HTMLElement; destroy: () => void } {
 
   function renderRooms() {
     const rooms: any[] = map?.layout?.ok ? map.layout.rooms ?? [] : [];
+    // Before the floor plan finds rooms, list the rooms the space already has by name.
+    const named: any[] = rooms.length ? [] : conn.state?.space?.rooms ?? [];
     list.replaceChildren(
       ...rooms.map((r: any) => h("a", { class: "home-room", href: "#map" },
         h("span", { class: "home-room-name" }, r.name ?? "Unnamed room"),
         h("span", { class: "muted" }, `${fmt(r.area_m2, 0)} m²`),
+        h("span", { class: "chev" }, "›"))),
+      ...named.map((r: any) => h("a", { class: "home-room", href: "#map" },
+        h("span", { class: "home-room-name" }, r.name || "Unnamed room"),
+        h("span", { class: "muted" }, r.level === "short" ? "Partly mapped" : r.scan_id ? "Mapped" : "Not scanned yet"),
         h("span", { class: "chev" }, "›"))),
       h("button", { class: "home-room add", onclick: extend }, "+ Extend the map"),
     );

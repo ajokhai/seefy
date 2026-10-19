@@ -126,7 +126,8 @@ export function mapScreen(): { el: HTMLElement; destroy: () => void } {
       case "recording": return "Recording on a phone";
       case "stopped": return `Stopped part-way${frames ? ` · ${frames} photos kept` : ""} · tap to resume`;
       case "failed": return m.error ? `Didn't work: ${m.error}` : "Didn't work";
-      case "queued": case "processing": return "Waiting to be built";
+      case "queued": return "Waiting to be built";
+      case "processing": return "Being built";
     }
     const placed = m.registered != null && m.total ? `${m.registered} of ${m.total} photos placed` : "";
     if (!inMap) return [placed, "not in the map yet"].filter(Boolean).join(" · ");

@@ -750,3 +750,18 @@ body[data-screen="setup"] main { max-width: 560px; margin: 0 auto; padding-botto
 @keyframes job-slide { 0% { transform: translateX(-100%); } 100% { transform: translateX(340%); } }
 .sheet-body .job-bar { margin: 4px 0 12px; }
 .home-job { display: flex; align-items: center; gap: 12px; text-decoration: none; }
+
+/* The Spaces button on the Map tab is a plain capsule, not a camera-overlay pill. */
+.space-title .pill { position: static; background: var(--fill); color: var(--accent); -webkit-backdrop-filter: none; backdrop-filter: none; font-weight: 500; flex: none; }
+/* A job banner on Home spans the grid and takes no space when there's no job. */
+.home > div:empty { display: none; }
+.home > .home-job, .home > div:has(> .home-job) { grid-column: 1 / -1; }
+/* Why the plan isn't finished: a caption under the points, not text over them. */
+.map-empty { inset: auto 12px 12px 12px; display: block; padding: 10px 14px; border-radius: 12px; font-size: 14px;
+  background: color-mix(in srgb, var(--card) 90%, transparent); color: var(--fg); }
+.map-empty p { margin: 0; }
+.home-plan-empty.caption { inset: auto 12px 12px 12px; flex-direction: row; justify-content: space-between; text-align: left;
+  padding: 10px 14px; border-radius: 12px; background: color-mix(in srgb, var(--card) 90%, transparent); color: var(--fg); font-size: 14px; }
+.home-plan-empty.caption p { margin: 0; }
+.home-plan-empty.caption button { flex: none; }
+@media (max-width: 600px) { .home-plan-empty.caption { flex-direction: column; align-items: stretch; } }
