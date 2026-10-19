@@ -13,7 +13,7 @@ fn(progress, **kwargs). progress(stage, fraction) reports what it's doing, with 
     jid = runner.submit("build", "Building the bedroom map", "seefy.reconstruct:build_job",
                         {"scan_id": sid}, plan=resources.plan(cfg["processing"]))
     runner.pause(jid); runner.resume(jid); runner.cancel(jid)
-    runner.snapshot() -> [{id, kind, label, state, stage, progress, elapsed_s, cpu_pct, ram_mb, ...}]
+    runner.snapshot() -> [{id, kind, label, state, stage, progress, elapsed_s, eta_s, cpu_pct, ram_mb, ...}]
 
 States: queued, running, paused, done, failed, cancelled. Jobs run one at a time by default.
 """
@@ -37,6 +37,8 @@ from . import resources
 ACTIVE = ("running", "paused")
 _PRIO_DARWIN_PROCESS = 4  # setpriority "which" for a whole process on macOS
 _PRIO_DARWIN_BG = 0x1000
+ETA_MIN_PROGRESS = 0.05  # below this, an estimate of time left is mostly noise
+ETA_MIN_ELAPSED_S = 10.0
 
 
 @dataclass
@@ -69,10 +71,20 @@ class Job:
         paused = self.paused_s + ((now - self._paused_at) if self._paused_at else 0.0)
         return max(0.0, end - self.started - paused)
 
+    def eta_s(self, now: float) -> float | None:
+        """Rough time left from the average pace so far; None until there's enough to go on."""
+        if self.state not in ACTIVE or not self.progress or self.progress < ETA_MIN_PROGRESS:
+            return None
+        done = self.elapsed_s(now)
+        if done < ETA_MIN_ELAPSED_S:
+            return None
+        return max(0.0, done * (1.0 - self.progress) / self.progress)
+
     def view(self, now: float) -> dict:
         return {"id": self.id, "kind": self.kind, "label": self.label, "state": self.state, "stage": self.stage,
                 "progress": None if self.progress is None else round(self.progress, 3),
-                "elapsed_s": round(self.elapsed_s(now), 1), "cpu_pct": self.cpu_pct, "ram_mb": self.ram_mb,
+                "elapsed_s": round(self.elapsed_s(now), 1),
+                "eta_s": None if (eta := self.eta_s(now)) is None else round(eta), "cpu_pct": self.cpu_pct, "ram_mb": self.ram_mb,
                 "peak_ram_mb": round(self.peak_ram_mb), "cores_limit": self.plan.get("num_threads"),
                 "background": bool(self.plan.get("background")), "error": self.error,
                 "pid": self.proc.pid if self.proc is not None and self.state in ACTIVE else None,

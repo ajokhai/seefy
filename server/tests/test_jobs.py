@@ -68,3 +68,15 @@ def test_stats_are_measured_while_running(runner):
     assert j["ram_mb"] and j["ram_mb"] > 5 and j["cpu_pct"] is not None
     assert j["pid"] and j["cores_limit"] >= 1
     runner.wait(jid, timeout=20)
+
+
+def test_eta_waits_for_enough_progress_then_estimates_time_left():
+    job = jobs.Job(id="j", kind="build", label="x", target=DEMO, kwargs={}, plan={})
+    job.state, job.started = "running", 1000.0
+    job.progress = 0.02
+    assert job.eta_s(1030.0) is None  # too little done to guess
+    job.progress = 0.5
+    assert job.eta_s(1005.0) is None  # too soon
+    assert job.eta_s(1030.0) == 30.0  # half done in 30 s: about 30 s to go
+    job.state = "done"
+    assert job.eta_s(1030.0) is None

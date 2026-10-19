@@ -19,6 +19,7 @@ Then put any snapshot of the map in room coordinates (align):
 from __future__ import annotations
 
 import json
+import math
 import shutil
 import threading
 import time
@@ -176,21 +177,26 @@ class Mapper:
         if new:
             progress("features", 0.05)
             t0 = time.perf_counter()
-            reader = pycolmap.ImageReaderOptions()
-            reader.camera_model = self.cfg["camera_model"]
-            if self.extracted:
-                reader.existing_camera_id = 1  # every frame shares the phone's one camera
-            else:
-                prior = self._lens_prior(new[0])
-                if prior:
-                    reader.camera_params = prior
             extraction = pycolmap.FeatureExtractionOptions()
             extraction.max_image_size = self.cfg["max_image_size"]
             extraction.sift.max_num_features = self.cfg["max_features"]
             resources.apply(p, extraction)
-            pycolmap.extract_features(self.db, self.images, image_names=new, camera_mode=pycolmap.CameraMode.SINGLE,
-                                      reader_options=reader, extraction_options=extraction)
-            self.extracted.update(new)
+            batch = self.cfg.get("progress_batch", 50)  # frames per call, so the progress bar moves on a long scan
+            for i in range(0, len(new), batch):
+                part = new[i:i + batch]
+                reader = pycolmap.ImageReaderOptions()
+                reader.camera_model = self.cfg["camera_model"]
+                if self.extracted:
+                    reader.existing_camera_id = 1  # every frame shares the phone's one camera
+                else:
+                    prior = self._lens_prior(part[0])
+                    if prior:
+                        reader.camera_params = prior
+                pycolmap.extract_features(self.db, self.images, image_names=part,
+                                          camera_mode=pycolmap.CameraMode.SINGLE,
+                                          reader_options=reader, extraction_options=extraction)
+                self.extracted.update(part)
+                progress("features", 0.05 + 0.3 * (i + len(part)) / len(new))
             timings["features"] = time.perf_counter() - t0
 
             progress("matching", 0.35)
@@ -224,7 +230,16 @@ class Mapper:
         if out.exists():
             shutil.rmtree(out)
         kw = {"input_path": str(self.model_dir)} if self.rec is not None and self.rec.num_reg_images() >= 10 else {}
-        models = pycolmap.incremental_mapping(self.db, self.images, out, options=opts, **kw)
+        total, placed = max(1, len(self.extracted)), [0]
+
+        def placed_one() -> None:  # called by COLMAP each time it places a frame
+            # COLMAP places some frames more than once (retries, extra models) and never places others,
+            # so ease towards the end rather than counting to it: the bar keeps moving and never sits full.
+            placed[0] += 1
+            progress("mapping", 0.6 + 0.35 * (1.0 - math.exp(-1.5 * placed[0] / total)))
+
+        models = pycolmap.incremental_mapping(self.db, self.images, out, options=opts,
+                                              next_image_callback=placed_one, **kw)
         timings["mapping"] = time.perf_counter() - t0
         if models:
             best = max(models.values(), key=lambda r: r.num_reg_images())

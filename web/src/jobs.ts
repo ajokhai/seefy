@@ -1,6 +1,6 @@
 // Background jobs (server jobs.py): building a scan's map and joining scans into a space's map.
 // The server sends {type: "jobs", jobs: [...]} whenever one changes; GET /api/jobs gives the list.
-// Each job: {id, kind: "scan" | "join", label, state, stage, progress, elapsed_s, cpu_pct, ram_mb,
+// Each job: {id, kind: "scan" | "join", label, state, stage, progress, elapsed_s, eta_s, cpu_pct, ram_mb,
 // scan_id?, space_id?}. States: queued, running, paused, done, failed, cancelled.
 
 import { conn } from "./conn";
@@ -35,11 +35,19 @@ export function jobFor(list: Job[], match: { scan_id?: string; space_id?: string
 
 const mins = (s: number) => (s < 60 ? `${Math.round(s)} s` : `${Math.floor(s / 60)} min ${Math.round(s % 60)} s`);
 
-/** One line saying what a job is doing: "Matching photos · 42% · 3 min 10 s · 480% CPU". */
+/** Time left, rounded the way people say it: "about 4 min left". Empty until the server has an estimate. */
+export function timeLeft(j: Job): string {
+  if (j.state !== "running" || j.eta_s == null) return "";
+  if (j.eta_s < 60) return "under a minute left";
+  return `about ${Math.round(j.eta_s / 60)} min left`;
+}
+
+/** One line saying what a job is doing: "Matching photos · 42% · about 4 min left · 3 min 10 s · 4.8 cores". */
 export function jobText(j: Job): string {
   if (j.state === "queued") return "Waiting for the job before it";
   const parts = [j.state === "paused" ? "Paused" : j.stage];
   if (j.progress != null) parts.push(`${Math.round(j.progress * 100)}%`);
+  if (timeLeft(j)) parts.push(timeLeft(j));
   if (j.elapsed_s) parts.push(mins(j.elapsed_s));
   if (j.state === "running" && j.cpu_pct != null) parts.push(`${(j.cpu_pct / 100).toFixed(1)} cores`);
   return parts.join(" · ");
