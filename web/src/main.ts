@@ -1,10 +1,13 @@
 import "./style.css";
-import { conn, isTouch } from "./conn";
+import { conn } from "./conn";
 import { guideScreen } from "./guide";
+import { homeScreen } from "./home";
 import { inspectScreen } from "./inspect";
-import { roomsScreen } from "./rooms";
 import { liveScreen } from "./live";
+import { isSetUp, onboardingScreen } from "./onboarding";
+import { roomsScreen } from "./rooms";
 import { sensorsScreen } from "./sensors";
+import { settingsScreen } from "./settings";
 import { h } from "./ui";
 
 // Simple line icons in the style of SF Symbols, drawn inline so nothing loads from outside.
@@ -14,15 +17,26 @@ const icon = (path: string) => {
   return span;
 };
 
+const HOME = '<path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/>';
+const ROOMS = '<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 12h9M12 3v18M12 16h9"/>';
+const GEAR = '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>';
+
+// Home, Rooms and Settings are the app (docs/UX.md). The rest is reached from inside it:
+// setup on first run, the scan flow, the accuracy check from a room, and Advanced screens from Settings.
 const screens = {
-  guide: { title: "Guide", make: guideScreen, icon: '<path d="M9 11l3 3 8-8"/><path d="M20 12v6a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h9"/>' },
-  live: { title: "Live", make: liveScreen, icon: '<path d="M3 6l6-3 6 3 6-3v15l-6 3-6-3-6 3z"/><path d="M9 3v15M15 6v15"/>' },
-  rooms: { title: "Rooms", make: roomsScreen, icon: '<path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/>' },
-  scan: { title: "Check accuracy", make: inspectScreen, icon: '<path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2"/><circle cx="12" cy="12" r="3.5"/>' },
-  details: { title: "Details", make: sensorsScreen, icon: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>' },
+  home: { title: "Home", make: homeScreen, icon: HOME, tab: true },
+  rooms: { title: "Rooms", make: roomsScreen, icon: ROOMS, tab: true },
+  settings: { title: "Settings", make: settingsScreen, icon: GEAR, tab: true },
+  setup: { title: "", make: onboardingScreen, icon: "", tab: false },
+  capture: { title: "Scan a room", make: guideScreen, icon: "", tab: false },
+  scan: { title: "Check accuracy", make: inspectScreen, icon: "", tab: false },
+  live: { title: "Live tracking", make: liveScreen, icon: "", tab: false },
+  details: { title: "Diagnostics", make: sensorsScreen, icon: "", tab: false },
 } as const;
 type Name = keyof typeof screens;
-const aliases: Record<string, Name> = { learn: "guide", sensors: "details" };
+const aliases: Record<string, Name> = { guide: "capture", learn: "capture", sensors: "details" };
+// Where each hidden screen belongs in the navigation.
+const parent: Partial<Record<Name, Name>> = { scan: "rooms", capture: "rooms", live: "settings", details: "settings" };
 
 const title = h("h1", { class: "large-title" });
 const connDot = h("span", { class: "dot", title: "Connection to the Seefy server" });
@@ -31,8 +45,7 @@ const main = h("main");
 const statusText = h("b", {}, "Connecting…");
 const statusSub = h("span", {}, "");
 const status = h("div", { class: "status" }, h("span", { class: "dot" }), h("div", {}, statusText, statusSub));
-// The scan inspector opens from a room ("Check accuracy"), so it has no tab of its own.
-const tabs = (Object.keys(screens) as Name[]).filter((name) => name !== "scan").map((name) =>
+const tabs = (Object.keys(screens) as Name[]).filter((name) => screens[name].tab).map((name) =>
   h("a", { href: `#${name}`, class: "tab" }, icon(screens[name].icon), h("span", {}, screens[name].title)),
 );
 document.body.append(
@@ -46,14 +59,15 @@ let current: { destroy: () => void } | null = null;
 
 function route(): void {
   const raw = location.hash.slice(1).split("/")[0]; // "#scan/<scan id>" opens that scan
-  const name: Name = (aliases[raw] ?? (raw in screens ? raw : isTouch ? "guide" : "live")) as Name;
+  // Until a room is mapped, everything starts at setup.
+  const name: Name = (aliases[raw] ?? (raw in screens ? raw : isSetUp() ? "home" : "setup")) as Name;
   current?.destroy();
   const s = screens[name].make();
   current = s;
-  title.textContent = screens[name].title;
+  title.textContent = name === "home" ? conn.state?.space?.name ?? "Home" : screens[name].title;
   main.replaceChildren(s.el);
   document.body.dataset.screen = name;
-  const tab = name === "scan" ? "rooms" : name; // accuracy checks belong to Rooms
+  const tab = parent[name] ?? name;
   tabs.forEach((t) => t.classList.toggle("on", t.getAttribute("href") === `#${tab}`));
 }
 
