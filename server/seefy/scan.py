@@ -19,7 +19,7 @@ from pathlib import Path
 
 import numpy as np
 
-from . import reconstruct
+from . import quality, reconstruct
 
 
 class Scan:
@@ -115,7 +115,7 @@ class Scan:
         samples.sort(key=lambda s: s["t"])
         return np.array([s["t"] for s in samples]), np.array([s["a"] for s in samples], dtype=float)
 
-    def live_update(self, cfg: dict, coverage_cfg: dict | None = None) -> dict | None:
+    def live_update(self, cfg: dict, coverage_cfg: dict | None = None, quality_cfg: dict | None = None) -> dict | None:
         """Extend the map with frames that arrived since the last update (called while recording).
 
         Returns a summary for the phone and Live, or None if there was nothing new or an update
@@ -148,13 +148,30 @@ class Scan:
         self.live_registered = res.registered
         out["coverage"] = _coverage(out, coverage_cfg, cfg, self.turn_rate(), recent)
         out["layout"] = _layout(out)
+        quality.apply(out, quality_cfg)
         (self.dir / "recon" / "live.json").write_text(json.dumps(out))
         return {
             "ok": res.ok, "registered": res.registered, "frames": len(names),
             "room_size_m": res.room_size_m, "scale_method": res.scale_method, "imu": res.imu,
             "coverage": out["coverage"], "update_s": round(time.perf_counter() - t0, 1),
             "layout": {k: out["layout"].get(k) for k in ("ok", "reason", "size_m", "confidence")},
+            "quality": out["quality"],
         }
+
+    def set_scale(self, measured_m: float, current_m: float, quality_cfg: dict | None = None) -> dict | None:
+        """The user measured a length: rescale the saved map so that length is measured_m."""
+        res = self.result()
+        if not res or not res.get("ok") or current_m <= 0 or measured_m <= 0:
+            return None
+        k = measured_m / current_m
+        _rescale(res, k)
+        res["size_source"] = "measured"
+        res["scale_method"] = f"measured ({measured_m:.2f} m)"
+        res["layout"] = _layout(res)
+        quality.apply(res, quality_cfg)
+        (self.dir / "recon" / "result.json").write_text(json.dumps(res))
+        self.update_meta(measured_scale=(self.meta().get("measured_scale") or 1.0) * k)
+        return res
 
     def frame_path(self, name: str) -> Path | None:
         p = self.frames_dir / name
@@ -164,7 +181,7 @@ class Scan:
         p = self.dir / "recon" / "live.json"
         return json.loads(p.read_text()) if p.exists() else None
 
-    def process(self, cfg: dict, progress, coverage_cfg: dict | None = None) -> dict:
+    def process(self, cfg: dict, progress, coverage_cfg: dict | None = None, quality_cfg: dict | None = None) -> dict:
         frame_times = {f["name"]: f["t"] for f in self._read("frames.jsonl")}
         self.update_meta(status="processing", processing_started=time.time())
         try:
@@ -178,6 +195,12 @@ class Scan:
         if res.ok:
             out["coverage"] = _coverage(out, coverage_cfg, cfg)
             out["layout"] = _layout(out)
+            k = self.meta().get("measured_scale")
+            if k:  # the user measured a wall on an earlier pass; keep their correction
+                _rescale(out, k)
+                out["size_source"] = "measured"
+                out["layout"] = _layout(out)
+            quality.apply(out, quality_cfg)
             (self.dir / "recon" / "result.json").write_text(json.dumps(out))
         self.update_meta(status="done" if res.ok else "failed", error=res.error,
                          registered=res.registered, total=res.total, timings_s=res.timings_s)
@@ -203,6 +226,15 @@ def _coverage(result: dict, cfg: dict | None, scan_cfg: dict, turn_dps: float | 
                               **({"recent": recent} if recent and "recent" in coverage.score.__code__.co_varnames else {}))
     except Exception as exc:  # scoring must never break mapping
         return {"error": str(exc)}
+
+
+def _rescale(result: dict, k: float) -> None:
+    """Multiply every distance in a result by k (positions, points, sizes, scale)."""
+    result["points"] = [[round(c * k, 3) for c in q] for q in result.get("points", [])]
+    for f in result.get("frames", []):
+        f["p"] = [round(c * k, 4) for c in f["p"]]
+    result["room_size_m"] = [round(c * k, 2) for c in result.get("room_size_m", [])]
+    result["scale"] = round(result.get("scale", 1.0) * k, 5)
 
 
 def _layout(result: dict) -> dict:

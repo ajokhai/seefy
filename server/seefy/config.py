@@ -247,3 +247,8 @@ from .wifi.motion import DEFAULTS as _WIFI_DEFAULTS, DOCS as _WIFI_DOCS  # noqa:
 
 DEFAULTS["wifi"] = dict(_WIFI_DEFAULTS)
 DOCS["wifi"] = dict(_WIFI_DOCS)
+
+from .quality import DEFAULTS as _QUALITY_DEFAULTS, DOCS as _QUALITY_DOCS  # noqa: E402
+
+DEFAULTS["quality"] = dict(_QUALITY_DEFAULTS)
+DOCS["quality"] = dict(_QUALITY_DOCS)

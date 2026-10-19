@@ -149,6 +149,33 @@ def create_app(data: Path, public_url: str = "") -> FastAPI:
         asyncio.create_task(live_mapping(s))
         return {"id": s.id, "room_id": room_id, "space_id": space_id, "settings": cfg["scan"]}
 
+    @app.post("/api/scans/{sid}/scale")
+    async def scan_scale(sid: str, body: dict = Body(...)):
+        """Fix the map's size from one measured length: a wall (index into layout.walls) or two points."""
+        s = scans.get(sid)
+        res = s.result() if s else None
+        if not res or not res.get("ok"):
+            raise HTTPException(404, "no finished scan")
+        try:
+            measured = float(body["measured_m"])
+            if "wall" in body:
+                current = float(res["layout"]["walls"][int(body["wall"])]["length_m"])
+            else:
+                a, b = body["a"], body["b"]
+                current = ((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2) ** 0.5
+        except (KeyError, IndexError, TypeError, ValueError):
+            raise HTTPException(400, "send measured_m with a wall index or two points a and b")
+        if not 0.2 <= measured <= 50:
+            raise HTTPException(400, "that length doesn't look right")
+        out = await asyncio.to_thread(s.set_scale, measured, current, cfg["quality"])
+        if not out:
+            raise HTTPException(400, "couldn't rescale")
+        metrics.event("scan_scale", id=sid, measured_m=measured, previous_m=round(current, 3))
+        await hub.broadcast({"type": "scan", "id": sid, "room_id": s.meta().get("room_id"), "status": "done",
+                             "quality": out["quality"], "room_size_m": out["room_size_m"]})
+        await hub.broadcast({"type": "space", "space": spaces.summary()})
+        return {"quality": out["quality"], "layout": out["layout"], "scale_method": out["scale_method"]}
+
     @app.post("/api/scans/{sid}/resume")
     async def scan_resume(sid: str):
         """Scan more: keep adding frames to a finished scan, extending its map."""
@@ -200,7 +227,7 @@ def create_app(data: Path, public_url: str = "") -> FastAPI:
             if s.meta().get("status") != "recording":
                 break
             async with processing:
-                live = await asyncio.to_thread(s.live_update, cfg["scan"], cfg["coverage"])
+                live = await asyncio.to_thread(s.live_update, cfg["scan"], cfg["coverage"], cfg["quality"])
             if live:
                 metrics.event("scan_live", id=s.id, **{k: live.get(k) for k in ("registered", "frames", "update_s")},
                               level=(live.get("coverage") or {}).get("level"))
@@ -214,9 +241,9 @@ def create_app(data: Path, public_url: str = "") -> FastAPI:
                 {"type": "scan", "id": s.id, "status": "processing", "stage": stage, "progress": frac}), loop)
 
         async with processing:
-            result = await asyncio.to_thread(s.process, cfg["scan"], progress, cfg["coverage"])
+            result = await asyncio.to_thread(s.process, cfg["scan"], progress, cfg["coverage"], cfg["quality"])
         summary = {k: result.get(k) for k in ("ok", "error", "registered", "total", "scale_method", "up_method",
-                                              "room_size_m", "timings_s", "coverage")}
+                                              "room_size_m", "timings_s", "coverage", "quality")}
         metrics.event("scan_processed", id=s.id, **summary)
         meta = s.meta()
         if result["ok"] and meta.get("space_id") and meta.get("room_id"):
