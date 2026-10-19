@@ -3,6 +3,7 @@
 import { conn } from "./conn";
 import { MapView } from "./mapview";
 import { View3D } from "./view3d";
+import { wifiCard } from "./wifi";
 import { fmt, h } from "./ui";
 
 export function liveScreen(): { el: HTMLElement; destroy: () => void } {
@@ -14,6 +15,7 @@ export function liveScreen(): { el: HTMLElement; destroy: () => void } {
   const stage = h("div", { class: "stage" }, h("div", { class: "segs floating" }, btnPlan, btn3d), canvas, box3d);
   const el = h("div", { class: "live" }, stage, side);
   const view = new MapView(canvas);
+  const wifi = wifiCard();
   let view3d: View3D | null = null;
   const setMode = (m: "plan" | "3d") => {
     btnPlan.classList.toggle("on", m === "plan");
@@ -123,10 +125,8 @@ export function liveScreen(): { el: HTMLElement; destroy: () => void } {
               h("div", {}, h("b", {}, d.name), h("div", { class: "muted" }, d.status?.tracking ? "Tracking" : d.mode)),
               h("div", { class: "device-metrics" }, `${fmt(d.rates?.pose ?? 0, 0)} poses/s`, h("br"), `sync ±${fmt(d.sync?.err_ms, 1)} ms`)))
           : [h("p", { class: "muted" }, "No phone connected. Open this page on your phone and follow the Guide.")])),
-      h("section", { class: "side-card" },
-        h("div", { class: "side-head" }, h("h3", {}, "Movement"), h("span", { class: "badge off" }, "Phase 3")),
-        h("p", { class: "muted" }, "WiFi sensing arrives with signal capture."),
-        ...(tm && tm.tags ? [h("p", { class: "muted" }, `Tag map: ${tm.tags} tags · ${tm.frames} frames${tm.solving ? " · solving…" : ""}`)] : [])),
+      wifi.el,
+      ...(tm && tm.tags ? [h("p", { class: "muted" }, `Tag map: ${tm.tags} tags · ${tm.frames} frames${tm.solving ? " · solving…" : ""}`)] : []),
       h("button", { onclick: () => view.clearTrails() }, "Clear trails"),
     );
   }
@@ -163,6 +163,7 @@ export function liveScreen(): { el: HTMLElement; destroy: () => void } {
       offs.forEach((off) => off());
       view.destroy();
       view3d?.destroy();
+      wifi.destroy();
     },
   };
 }

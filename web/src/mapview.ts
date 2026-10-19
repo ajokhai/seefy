@@ -13,6 +13,8 @@ export interface PhoneTrack {
 
 const TRAIL_MS = 60_000;
 
+import { drawPlan } from "./plan2d";
+
 // Blueprint palette: white linework on deep blue, the same in light and dark mode.
 const BLUEPRINT: Record<string, string> = {
   "--bg": "#14396b",
@@ -36,7 +38,7 @@ function css(name: string): string {
 export class MapView {
   canvas: HTMLCanvasElement;
   tagmap: any = null;
-  scan: { points: number[][]; frames: { p: number[] }[] } | null = null;
+  scan: { points: number[][]; frames: { p: number[] }[]; layout?: any } | null = null;
   phones = new Map<string, PhoneTrack>();
   private ctx: CanvasRenderingContext2D;
   private raf = 0;
@@ -93,7 +95,13 @@ export class MapView {
         ys.push(t.corners[i + 1]);
       }
     }
-    if (this.scan) {
+    if (this.scan?.layout?.ok && this.scan.layout.outline?.length) {
+      // With a floor plan, fit the room itself rather than stray points.
+      for (const q of this.scan.layout.outline) {
+        xs.push(q[0]);
+        ys.push(q[1]);
+      }
+    } else if (this.scan) {
       // Robust extent: ignore the outermost 2% of points.
       const px = this.scan.points.map((q) => q[0]).sort((a, b) => a - b);
       const py = this.scan.points.map((q) => q[1]).sort((a, b) => a - b);
@@ -171,13 +179,18 @@ export class MapView {
     g.strokeStyle = css("--axis-y");
     g.beginPath(); g.moveTo(X(0), Y(0)); g.lineTo(X(0), Y(0.5)); g.stroke();
 
+    // Floor plan (walls, doors, furniture, dimensions), then the raw points faintly on top.
+    const plan = this.scan?.layout?.ok;
+    if (plan) drawPlan(g, this.scan!.layout, X, Y, s);
     // Scanned room: points between knee and head height outline walls and furniture from above.
     if (this.scan) {
+      g.globalAlpha = plan ? 0.35 : 1;
       g.fillStyle = css("--scan-point");
       for (const q of this.scan.points) {
         if (q[2] < 0.15 || q[2] > 2.3) continue;
         g.fillRect(X(q[0]) - 0.75, Y(q[1]) - 0.75, 1.5, 1.5);
       }
+      g.globalAlpha = 1;
       g.strokeStyle = css("--scan-path");
       g.lineWidth = 2;
       g.setLineDash([6, 5]);

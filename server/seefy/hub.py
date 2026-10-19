@@ -96,6 +96,7 @@ class Hub:
         self._solving = False
         self._tasks: list[asyncio.Task] = []
         self.scans = None  # ScanStore, set by the app
+        self.spaces = None  # Spaces, set by the app
 
     # -- lifecycle ----------------------------------------------------------
 
@@ -128,6 +129,7 @@ class Hub:
         await self._send(dev, {
             "type": "welcome", "device": dev.id, "host": host_ms(), "config": self.cfg.values,
             "tagmap": self.tagmap.to_json(), "lens": self.lens.get(dev.id), "session": self._session(),
+            "space": self.spaces.summary() if self.spaces else None,
         })
         self.devices[key] = dev  # only now does it receive broadcasts, so "welcome" always comes first
         self.metrics.event("connect", device=dev.id, tab=dev.tab, name=dev.name, role=dev.role, ip=ip, ua=dev.ua)
@@ -249,6 +251,7 @@ class Hub:
             "host": host_ms(),
             "devices": [d.summary() for d in self.devices.values()],
             "session": self._session(),
+            "space": self.spaces.summary() if self.spaces else None,
             "tagmap": {k: tm[k] for k in ("version", "frames", "frames_used", "passes", "rms_px", "solve_ms")}
             | {"tags": len(tm["tags"]), "solving": self._solving},
         }

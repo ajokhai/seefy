@@ -20,6 +20,8 @@ from .lens import LensStore
 from .metrics import MetricsLog
 from .recorder import Recorder
 from .scan import ScanStore
+from .spaces import Spaces
+from .wifi import live as wifi_live
 from .tagmap import TagMap
 
 WEB_DIST = Path(__file__).resolve().parents[2] / "web" / "dist"
@@ -34,16 +36,21 @@ def create_app(data: Path, public_url: str = "") -> FastAPI:
     hub = Hub(cfg, tagmap, lens, recorder, metrics)
     scans = ScanStore(data / "scans")
     hub.scans = scans
+    spaces = Spaces(data / "spaces.json", scans)
+    hub.spaces = spaces
     processing = asyncio.Lock()  # one reconstruction at a time
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
         hub.start()
+        wifi.start()
         yield
+        await wifi.stop()
         await hub.stop()
 
     app = FastAPI(title="Seefy", lifespan=lifespan)
     app.state.hub = hub
+    wifi = wifi_live.attach(app, hub, cfg, data)  # the laptop's own WiFi signal: motion detection, /api/wifi
 
     @app.websocket("/ws")
     async def ws(socket: WebSocket):
@@ -133,12 +140,26 @@ def create_app(data: Path, public_url: str = "") -> FastAPI:
 
     @app.post("/api/scans/start")
     async def scan_start(body: dict = Body(default={})):
+        space_id, room_id = spaces.target_room(body.get("room_id"))
         s = scans.start(str(body.get("device", ""))[:64])
         s.lens = lens.get(str(body.get("device", ""))[:64])
-        metrics.event("scan_start", id=s.id, device=body.get("device"))
-        await hub.broadcast({"type": "scan", "id": s.id, "status": "recording"})
+        s.update_meta(space_id=space_id, room_id=room_id)
+        metrics.event("scan_start", id=s.id, device=body.get("device"), room_id=room_id)
+        await hub.broadcast({"type": "scan", "id": s.id, "room_id": room_id, "status": "recording"})
         asyncio.create_task(live_mapping(s))
-        return {"id": s.id, "settings": cfg["scan"]}
+        return {"id": s.id, "room_id": room_id, "space_id": space_id, "settings": cfg["scan"]}
+
+    @app.post("/api/scans/{sid}/resume")
+    async def scan_resume(sid: str):
+        """Scan more: keep adding frames to a finished scan, extending its map."""
+        s = scans.get(sid)
+        if not s or s.meta().get("status") in ("recording", "queued", "processing"):
+            raise HTTPException(409, "scan is busy or missing")
+        s.update_meta(status="recording", resumed=time.time())
+        metrics.event("scan_resume", id=sid, frames=s.count)
+        await hub.broadcast({"type": "scan", "id": sid, "room_id": s.meta().get("room_id"), "status": "recording"})
+        asyncio.create_task(live_mapping(s))
+        return {"id": sid, "frames": s.count, "settings": cfg["scan"]}
 
     @app.post("/api/scans/{sid}/frame")
     async def scan_frame(sid: str, request: Request, t: float):
@@ -197,7 +218,12 @@ def create_app(data: Path, public_url: str = "") -> FastAPI:
         summary = {k: result.get(k) for k in ("ok", "error", "registered", "total", "scale_method", "up_method",
                                               "room_size_m", "timings_s", "coverage")}
         metrics.event("scan_processed", id=s.id, **summary)
-        await hub.broadcast({"type": "scan", "id": s.id, "status": "done" if result["ok"] else "failed", **summary})
+        meta = s.meta()
+        if result["ok"] and meta.get("space_id") and meta.get("room_id"):
+            spaces.activate_scan(meta["space_id"], meta["room_id"], s.id)  # a good scan becomes the room's map
+        await hub.broadcast({"type": "scan", "id": s.id, "room_id": meta.get("room_id"),
+                             "status": "done" if result["ok"] else "failed", **summary})
+        await hub.broadcast({"type": "space", "space": spaces.summary()})
 
     @app.get("/api/scans")
     def scan_list():
@@ -228,6 +254,74 @@ def create_app(data: Path, public_url: str = "") -> FastAPI:
         if not s:
             raise HTTPException(404, "no such scan")
         return {"meta": s.meta(), "result": s.result()}
+
+    # -- spaces and rooms ---------------------------------------------------
+
+    async def space_changed() -> None:
+        await hub.broadcast({"type": "space", "space": spaces.summary()})
+
+    @app.get("/api/spaces")
+    def spaces_list():
+        return spaces.list()
+
+    @app.post("/api/spaces")
+    async def spaces_create(body: dict = Body(default={})):
+        sp = spaces.create_space(str(body.get("name", "")))
+        await space_changed()
+        return spaces.space_view(sp)
+
+    @app.patch("/api/spaces/{sid}")
+    async def spaces_update(sid: str, body: dict = Body(default={})):
+        sp = spaces.update_space(sid, body)
+        if not sp:
+            raise HTTPException(404, "no such space")
+        await space_changed()
+        return spaces.space_view(sp)
+
+    @app.delete("/api/spaces/{sid}")
+    async def spaces_delete(sid: str):
+        if not spaces.delete_space(sid):
+            raise HTTPException(404, "no such space")
+        await space_changed()
+        return {"ok": True}
+
+    @app.get("/api/spaces/{sid}/map")
+    def spaces_map(sid: str):
+        m = spaces.map(sid)
+        if not m:
+            raise HTTPException(404, "no such space")
+        return m
+
+    @app.post("/api/spaces/{sid}/rooms")
+    async def rooms_create(sid: str, body: dict = Body(default={})):
+        r = spaces.create_room(sid, str(body.get("name", "")))
+        if not r:
+            raise HTTPException(404, "no such space")
+        await space_changed()
+        return spaces.room_view(r)
+
+    @app.patch("/api/spaces/{sid}/rooms/{rid}")
+    async def rooms_update(sid: str, rid: str, body: dict = Body(default={})):
+        r = spaces.update_room(sid, rid, body)
+        if not r:
+            raise HTTPException(404, "no such room")
+        await space_changed()
+        return spaces.room_view(r)
+
+    @app.delete("/api/spaces/{sid}/rooms/{rid}")
+    async def rooms_delete(sid: str, rid: str):
+        if not spaces.delete_room(sid, rid):
+            raise HTTPException(404, "no such room")
+        await space_changed()
+        return {"ok": True}
+
+    @app.post("/api/spaces/{sid}/rooms/{rid}/activate-scan")
+    async def rooms_activate_scan(sid: str, rid: str, body: dict = Body(...)):
+        r = spaces.activate_scan(sid, rid, str(body.get("scan_id", "")))
+        if not r:
+            raise HTTPException(404, "no such room or scan")
+        await space_changed()
+        return spaces.room_view(r)
 
     @app.get("/api/qr.svg")
     def qr_svg():

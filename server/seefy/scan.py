@@ -219,6 +219,10 @@ class ScanStore:
 
     def start(self, device: str) -> Scan:
         sid = f"{dt.datetime.now():%Y%m%d-%H%M%S}"
+        n = 2
+        while (self.root / sid).exists():  # two scans in the same second
+            sid = f"{dt.datetime.now():%Y%m%d-%H%M%S}-{n}"
+            n += 1
         d = self.root / sid
         (d / "frames").mkdir(parents=True)
         s = Scan(d)

@@ -242,3 +242,8 @@ from .coverage import DEFAULTS as _COVERAGE_DEFAULTS, DOCS as _COVERAGE_DOCS  # 
 
 DEFAULTS["coverage"] = dict(_COVERAGE_DEFAULTS)
 DOCS["coverage"] = dict(_COVERAGE_DOCS)
+
+from .wifi.motion import DEFAULTS as _WIFI_DEFAULTS, DOCS as _WIFI_DOCS  # noqa: E402
+
+DEFAULTS["wifi"] = dict(_WIFI_DEFAULTS)
+DOCS["wifi"] = dict(_WIFI_DOCS)
