@@ -413,9 +413,11 @@ export function inspectScreen(): { el: HTMLElement; destroy: () => void } {
   window.addEventListener("keydown", onKey);
 
   async function load() {
+    // #scan/<sid> opens that scan (Rooms → Check accuracy); otherwise the newest finished one.
+    const want = decodeURIComponent(location.hash.match(/^#scan\/(.+)$/)?.[1] ?? "");
     let r: any;
     try {
-      r = await conn.api("/api/scans/latest");
+      r = want ? { ...(await conn.api(`/api/scans/${encodeURIComponent(want)}`)).result, id: want } : await conn.api("/api/scans/latest");
     } catch {
       r = null;
     }
