@@ -1,0 +1,30 @@
+/* Room editor. Uses the app's tokens and .side-card / .side-head / .badge / .stats from style.css. */
+
+.editor { display: flex; flex-direction: column; gap: 10px; height: calc(100vh - 200px); min-height: 460px; }
+
+.ed-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.ed-bar .muted { font-size: 13px; }
+.ed-sep { width: 1px; height: 22px; background: var(--line); margin: 0 4px; }
+.ed-grow { flex: 1; }
+.ed-tool:disabled, .ed-save:disabled { opacity: 0.4; cursor: default; }
+.ed-save { background: var(--accent); color: #fff; }
+
+.ed-main { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 260px; gap: 16px; }
+.ed-stage { position: relative; min-width: 0; min-height: 0; background: var(--card); border-radius: var(--radius); overflow: hidden; }
+.ed-canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; outline: none; }
+
+.ed-panel { align-self: start; display: flex; flex-direction: column; gap: 8px; }
+.ed-panel .side-head { margin-bottom: 0; }
+.ed-panel p { margin: 0; font-size: 14px; }
+.ed-panel button { align-self: flex-start; }
+.ed-field { display: grid; grid-template-columns: 90px 1fr; align-items: center; gap: 8px; font-size: 14px; color: var(--muted); }
+.ed-field input { min-width: 0; font: inherit; color: var(--fg); background: var(--fill); border: 0; border-radius: 8px; padding: 6px 8px; }
+.ed-danger { color: var(--danger); }
+.ed-tips { margin: 0; padding-left: 18px; font-size: 14px; color: var(--muted); }
+.ed-tips li { margin: 3px 0; }
+
+@media (max-width: 800px) {
+  .editor { height: auto; }
+  .ed-main { grid-template-columns: 1fr; }
+  .ed-stage { height: 60vh; }
+}
