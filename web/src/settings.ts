@@ -1,7 +1,7 @@
 // Settings (docs/UX.md): plain choices first; everything that only matters to builders sits under Advanced.
 
 import { conn } from "./conn";
-import { h, toast } from "./ui";
+import { askText, confirmSheet, h, toast } from "./ui";
 
 export function settingsScreen(): { el: HTMLElement; destroy: () => void } {
   const el = h("div", { class: "settings-page" });
@@ -17,10 +17,10 @@ export function settingsScreen(): { el: HTMLElement; destroy: () => void } {
     const phones = (conn.state?.devices ?? []).filter((d: any) => d.role === "phone");
     const taught = wifi?.baseline === "saved";
     el.replaceChildren(
-      h("h3", { class: "section-title" }, "Home"),
+      h("h3", { class: "section-title" }, "Space"),
       h("div", { class: "group list" },
         row("Name", sp?.name ?? "Not set up yet", h("button", { class: "link-btn", onclick: rename, disabled: !sp }, "Rename")),
-        row("Rooms", sp ? `${sp.rooms.length} room${sp.rooms.length === 1 ? "" : "s"}` : "None yet", null, "#rooms")),
+        row("Map", sp ? "Floor plan, rooms and the scans it's built from" : "None yet", null, "#map")),
 
       h("h3", { class: "section-title" }, "Movement sensing"),
       h("div", { class: "group list" },
@@ -50,7 +50,7 @@ export function settingsScreen(): { el: HTMLElement; destroy: () => void } {
 
   async function rename() {
     const sp = conn.state?.space;
-    const name = prompt("Name your home", sp?.name ?? "")?.trim();
+    const name = await askText("Rename this space", { value: sp?.name ?? "" });
     if (!sp || !name) return;
     try {
       await conn.api(`/api/spaces/${sp.id}`, "PATCH", { name });
@@ -60,7 +60,7 @@ export function settingsScreen(): { el: HTMLElement; destroy: () => void } {
   }
 
   async function teach() {
-    if (!confirm("For 20 seconds nobody should move. Leave the room if you can. Start?")) return;
+    if (!(await confirmSheet("Teach Seefy a still home", "For 20 seconds nobody should move. Leave the room if you can.", "Start"))) return;
     try {
       await conn.api("/api/wifi/baseline", "POST", { seconds: 20 });
     } catch (e: any) {

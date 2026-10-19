@@ -498,7 +498,7 @@ th { color: var(--muted); font-weight: 500; }
 .home-hero.moving .pulse { background: var(--warn); animation: breathe 1s ease-in-out infinite; }
 .home-hero.moving { box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--warn) 55%, transparent); }
 @keyframes breathe { 50% { box-shadow: 0 0 0 8px color-mix(in srgb, currentColor 0%, transparent), 0 0 0 6px color-mix(in srgb, var(--warn) 25%, transparent); } }
-.home-map { position: relative; background: var(--plan-bg); border-radius: 16px; overflow: hidden; border: 0.5px solid var(--line); }
+.home-map { display: block; position: relative; background: var(--plan-bg); border-radius: 16px; overflow: hidden; border: 0.5px solid var(--line); }
 .home-plan { display: block; width: 100%; height: 46vh; min-height: 260px; }
 .home-plan-empty {
   position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px;
@@ -545,12 +545,74 @@ body[data-screen="setup"] main { max-width: 560px; margin: 0 auto; padding-botto
 .ob-status.busy .dot { background: var(--accent); animation: breathe 1.4s infinite; }
 .ob-status .btn { min-height: 34px; margin-left: 6px; }
 
+/* ---- map ---------------------------------------------------------------------- */
+
+.space-head { background: var(--card); border-radius: 20px; overflow: hidden; margin-bottom: 14px; box-shadow: 0 2px 14px rgba(0, 0, 0, 0.06); }
+.space-cover { height: 180px; background: var(--fill) center / cover no-repeat; }
+.space-title { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 16px 20px; }
+.space-title h2 { font-size: 26px; margin: 0; }
+.space-title p { margin: 2px 0 0; }
+.pill { min-height: 36px; border-radius: 18px; padding: 0 16px; font-size: 15px; }
+.banner { display: flex; align-items: center; gap: 10px; padding: 12px 16px; border-radius: 14px; margin-bottom: 14px; font-size: 15px; }
+.banner.busy { background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--accent); }
+.banner.busy .dot { background: var(--accent); animation: breathe 1.4s infinite; }
+.banner.warn { background: color-mix(in srgb, var(--warn) 14%, transparent); color: color-mix(in srgb, var(--warn) 70%, var(--fg)); }
+.map-card { position: relative; background: var(--plan-bg); border-radius: 20px; overflow: hidden; border: 0.5px solid var(--line); }
+.map-plan { display: block; width: 100%; height: 56vh; min-height: 300px; cursor: pointer; }
+.map-empty { position: absolute; inset: 0; display: grid; place-items: center; padding: 24px; text-align: center; color: var(--muted); }
+.map-hint { position: absolute; left: 50%; bottom: 12px; transform: translateX(-50%); margin: 0; padding: 6px 12px; border-radius: 999px;
+  background: color-mix(in srgb, var(--card) 85%, transparent); font-size: 13px; color: var(--muted); }
+.map-actions { display: flex; flex-direction: column; gap: 8px; margin: 16px 0 8px; }
+.ob-secondary { width: 100%; min-height: 50px; background: var(--card); color: var(--fg); box-shadow: inset 0 0 0 1px var(--line); }
+.set-text.plain { background: none; padding: 0; min-height: 0; text-align: left; font-weight: 400; color: var(--fg); border-radius: 0; }
+.small { font-size: 13px; }
+.empty-state { text-align: center; padding: 60px 24px; display: flex; flex-direction: column; align-items: center; gap: 10px; }
+.skeleton { border-radius: 20px; background: linear-gradient(90deg, var(--card), var(--fill), var(--card)); background-size: 200% 100%; animation: shimmer 1.2s infinite linear; }
+.map-skel { height: 60vh; }
+@keyframes shimmer { to { background-position: -200% 0; } }
+
+/* first run: progress bar and sticky footer */
+.ob-progress { position: sticky; top: 0; height: 3px; background: var(--fill); margin: 0 -16px; z-index: 5; }
+.ob-progress > div { height: 100%; background: var(--accent); transition: width 0.3s ease; }
+.ob-foot {
+  position: sticky; bottom: 0; display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  margin: 0 -16px; padding: 12px 16px max(12px, env(safe-area-inset-bottom));
+  background: color-mix(in srgb, var(--bg) 92%, transparent); -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px);
+  border-top: 0.5px solid var(--line);
+}
+.ob-foot .primary { width: auto; min-width: 140px; margin: 0; }
+.ob-back { width: auto !important; text-decoration: underline; color: var(--fg) !important; font-weight: 600 !important; }
+.ob-page { min-height: calc(100vh - 120px); }
+.ob-done { width: 88px; height: 88px; border-radius: 50%; display: grid; place-items: center; font-size: 44px; color: #fff; background: var(--ok); }
+
+/* ---- sheets ------------------------------------------------------------------- */
+
+.sheet {
+  position: fixed; inset: 0; z-index: 80; display: flex; align-items: flex-end; justify-content: center;
+  background: rgba(0, 0, 0, 0); transition: background 0.2s ease;
+}
+.sheet.open { background: rgba(0, 0, 0, 0.35); }
+.sheet-panel {
+  width: min(560px, 100%); max-height: 92vh; overflow: auto; background: var(--card);
+  border-radius: 20px 20px 0 0; padding: 8px 24px max(24px, env(safe-area-inset-bottom));
+  transform: translateY(100%); transition: transform 0.22s cubic-bezier(0.2, 0.8, 0.2, 1);
+  box-shadow: 0 -10px 40px rgba(0, 0, 0, 0.18);
+}
+.sheet.open .sheet-panel { transform: none; }
+.sheet-grip { width: 36px; height: 5px; border-radius: 3px; background: var(--fill); margin: 0 auto 14px; }
+.sheet-body { display: flex; flex-direction: column; gap: 12px; }
+.sheet-body h2 { font-size: 22px; margin: 0; }
+.sheet-body input { width: 100%; min-height: 50px; font-size: 17px; }
+.sheet-body .link-btn { width: 100%; }
+
 /* ---- desktop: macOS-style sidebar instead of a bottom tab bar ------------- */
 
 .brand, .status { display: none; }
 
 @media (min-width: 900px) {
   :root { --sidebar: #ebebf0; }
+  .sheet { align-items: center; }
+  .sheet-panel { border-radius: 20px; }
   body { padding-left: 232px; }
 
   .tab-bar {
@@ -621,6 +683,11 @@ body[data-screen="setup"] main { max-width: 560px; margin: 0 auto; padding-botto
   .home-hero { grid-column: 1 / -1; margin: 0; }
   .home-map { grid-row: 2 / span 2; }
   .home-plan { height: calc(100vh - 260px); }
+  .mapscreen { max-width: 1000px; }
+  .map-actions { flex-direction: row; }
+  .map-actions .primary { width: auto; margin: 0; }
+  .map-actions .ob-secondary { width: auto; padding: 0 22px; min-height: 40px; }
+  .space-cover { height: 220px; }
   .home > .section-title { margin: 4px 4px -12px; }
   .settings-page { max-width: 720px; }
   .live { height: calc(100vh - 106px); min-height: 480px; grid-template-columns: 1fr 340px; gap: 20px; }

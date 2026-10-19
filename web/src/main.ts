@@ -4,8 +4,8 @@ import { guideScreen } from "./guide";
 import { homeScreen } from "./home";
 import { inspectScreen } from "./inspect";
 import { liveScreen } from "./live";
+import { mapScreen } from "./map";
 import { isSetUp, onboardingScreen } from "./onboarding";
-import { roomsScreen } from "./rooms";
 import { sensorsScreen } from "./sensors";
 import { settingsScreen } from "./settings";
 import { h } from "./ui";
@@ -18,14 +18,14 @@ const icon = (path: string) => {
 };
 
 const HOME = '<path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/>';
-const ROOMS = '<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 12h9M12 3v18M12 16h9"/>';
+const MAP = '<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 12h9M12 3v18M12 16h9"/>';
 const GEAR = '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>';
 
 // Home, Rooms and Settings are the app (docs/UX.md). The rest is reached from inside it:
 // setup on first run, the scan flow, the accuracy check from a room, and Advanced screens from Settings.
 const screens = {
   home: { title: "Home", make: homeScreen, icon: HOME, tab: true },
-  rooms: { title: "Rooms", make: roomsScreen, icon: ROOMS, tab: true },
+  map: { title: "Map", make: mapScreen, icon: MAP, tab: true },
   settings: { title: "Settings", make: settingsScreen, icon: GEAR, tab: true },
   setup: { title: "", make: onboardingScreen, icon: "", tab: false },
   capture: { title: "Scan a room", make: guideScreen, icon: "", tab: false },
@@ -34,9 +34,9 @@ const screens = {
   details: { title: "Diagnostics", make: sensorsScreen, icon: "", tab: false },
 } as const;
 type Name = keyof typeof screens;
-const aliases: Record<string, Name> = { guide: "capture", learn: "capture", sensors: "details" };
+const aliases: Record<string, Name> = { guide: "capture", learn: "capture", sensors: "details", rooms: "map" };
 // Where each hidden screen belongs in the navigation.
-const parent: Partial<Record<Name, Name>> = { scan: "rooms", capture: "rooms", live: "settings", details: "settings" };
+const parent: Partial<Record<Name, Name>> = { scan: "map", capture: "settings", live: "settings", details: "settings" };
 
 const title = h("h1", { class: "large-title" });
 const connDot = h("span", { class: "dot", title: "Connection to the Seefy server" });
