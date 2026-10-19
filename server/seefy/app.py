@@ -323,6 +323,13 @@ def create_app(data: Path, public_url: str = "") -> FastAPI:
         await space_changed()
         return spaces.room_view(r)
 
+    @app.post("/api/log")
+    def client_log(body: dict = Body(default={})):
+        """Errors reported by the browser (e.g. a scan that failed to start), so they show up in the results log."""
+        metrics.event("client_error", where=str(body.get("where", ""))[:80], message=str(body.get("message", ""))[:500],
+                      device=str(body.get("device", ""))[:64])
+        return {"ok": True}
+
     @app.get("/api/qr.svg")
     def qr_svg():
         img = qrcode.make(public_url or "https://seefy.local:8443", image_factory=qrcode.image.svg.SvgPathImage,

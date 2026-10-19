@@ -30,6 +30,7 @@ class Scan:
         self.mapper: reconstruct.Mapper | None = None
         self.lens: dict | None = None  # the scanning phone's lens calibration, set by the app
         self.live_frames = 0  # frames included in the last live map update
+        self.live_registered = 0  # frames placed as of the last live map update
         self.count = len(list(self.frames_dir.glob("*.jpg"))) if self.frames_dir.exists() else 0
 
     @property
@@ -131,6 +132,7 @@ class Scan:
             return None
         try:
             t0 = time.perf_counter()
+            prev_frames = self.live_frames
             self.mapper.update(names)
             self.live_frames = len(names)
             if self.mapper.rec is None:
@@ -142,7 +144,9 @@ class Scan:
             self.mapper.lock.release()
         out = res.to_json()
         out["id"] = self.id
-        out["coverage"] = _coverage(out, coverage_cfg, cfg, self.turn_rate())
+        recent = (res.registered - self.live_registered, len(names) - prev_frames)
+        self.live_registered = res.registered
+        out["coverage"] = _coverage(out, coverage_cfg, cfg, self.turn_rate(), recent)
         out["layout"] = _layout(out)
         (self.dir / "recon" / "live.json").write_text(json.dumps(out))
         return {
@@ -183,7 +187,8 @@ class Scan:
         return out
 
 
-def _coverage(result: dict, cfg: dict | None, scan_cfg: dict, turn_dps: float | None = None) -> dict | None:
+def _coverage(result: dict, cfg: dict | None, scan_cfg: dict, turn_dps: float | None = None,
+              recent: tuple[int, int] | None = None) -> dict | None:
     """'Is it enough?' score for a (partial) map: level, hints, and per-component detail."""
     if not result.get("ok"):
         return None
@@ -194,7 +199,8 @@ def _coverage(result: dict, cfg: dict | None, scan_cfg: dict, turn_dps: float | 
          "capture_fps": scan_cfg["capture_fps"], "max_turn_deg_per_frame": scan_cfg["max_turn_deg_per_frame"]}
     try:
         return coverage.score(result["frames"], result["total"], result.get("imu") or None, c,
-                              points=result.get("points"), turn_dps=turn_dps)
+                              points=result.get("points"), turn_dps=turn_dps,
+                              **({"recent": recent} if recent and "recent" in coverage.score.__code__.co_varnames else {}))
     except Exception as exc:  # scoring must never break mapping
         return {"error": str(exc)}
 

@@ -8,6 +8,7 @@ import { openCameraSheet, requestMotionPermission, type CameraSheet } from "./ca
 import { conn, isTouch } from "./conn";
 import { ScanRecorder, type ScanStats } from "./scan";
 import { Tracker, type FrameResult } from "./tracker";
+import { MapView } from "./mapview";
 import { fmt, h, toast } from "./ui";
 
 type Mode = "scan" | "tags";
@@ -61,7 +62,8 @@ export function guideScreen(): { el: HTMLElement; destroy: () => void } {
       if (list.length && list[0].id === scan.id) scan = { ...scan, ...list[0] };
       if (scan.status === "done" && scan.room_size_m === undefined) {
         const { result } = await conn.api(`/api/scans/${scan.id}`);
-        if (result) scan = { ...scan, room_size_m: result.room_size_m, scale_method: result.scale_method };
+        if (result) scan = { ...scan, room_size_m: result.room_size_m, scale_method: result.scale_method,
+                             coverage: result.coverage, layout: result.layout };
       }
     } catch {
       /* host restarting */
@@ -71,7 +73,12 @@ export function guideScreen(): { el: HTMLElement; destroy: () => void } {
 
   // ---- full-screen camera: markerless scan -----------------------------------
 
-  async function openScanCamera() {
+  const roomName = () => {
+    const sp = conn.state?.space;
+    return sp?.rooms?.find((r: any) => r.id === sp.active_room)?.name ?? null;
+  };
+
+  async function openScanCamera(resumeId?: string) {
     const motionAllowed = requestMotionPermission(); // must start inside the tap on iOS
     let stream: MediaStream;
     try {
@@ -108,7 +115,17 @@ export function guideScreen(): { el: HTMLElement; destroy: () => void } {
           rec.r = new ScanRecorder(sheet.video);
           rec.r.onStats = (s) => coach(sheet, s, rec.live);
           sheet.setShutter("recording");
-          await rec.r.start();
+          try {
+            await rec.r.start(resumeId);
+          } catch (e: any) {
+            const message = e?.message ?? String(e);
+            rec.r = null;
+            sheet.setShutter("idle");
+            sheet.setHint(`Couldn't start the scan: ${message}`);
+            toast(`Couldn't start the scan: ${message}`);
+            conn.api("/api/log", "POST", { where: "scan start", message, device: conn.id }).catch(() => {});
+            return;
+          }
           if (!(await motionAllowed)) toast("Motion sensors are off, so turn speed and scale can't be measured.");
         } else {
           sheet.setShutter("busy");
@@ -135,8 +152,8 @@ export function guideScreen(): { el: HTMLElement; destroy: () => void } {
     });
     sheet.video.srcObject = stream;
     sheet.video.play().catch(() => {});
-    sheet.setStatus("Ready");
-    sheet.setHint("Hold the phone upright at chest height. Tap the button, then walk slowly along the walls.");
+    sheet.setStatus(roomName() ? `Ready · ${roomName()}` : "Ready");
+    sheet.setHint("Lights on. Hold the phone upright and steady. Tap the button, then walk slowly around the room, pointing across it.");
   }
 
   /** Live coaching on the camera: turn speed from the gyroscope (instant), coverage from the laptop's map. */
@@ -161,11 +178,12 @@ export function guideScreen(): { el: HTMLElement; destroy: () => void } {
     if (s.brightness < 35) sheet.setHint("Too dark: turn on the lights.");
     else if (s.motion && s.turnRate > 2 * limit) sheet.setHint("Turn much slower: frames are being lost.");
     else if (s.motion && s.turnRate > limit) sheet.setHint("Turn slower.");
+    else if (s.blurry > 0.5) sheet.setHint(s.brightness < 70 ? "Blurry: more light helps, and hold the phone steady." : "Blurry: hold the phone steadier and move slower.");
     else if (cov?.level === "extra") sheet.setHint("Room covered. Tap the button to finish.");
     else if (cov?.level === "enough") sheet.setHint(`That's enough. ${cov.hints?.[0] ? `For extra margin: ${cov.hints[0].toLowerCase()}` : "Keep going for extra margin, or tap to finish."}`);
     else if (cov?.hints?.length) sheet.setHint(cov.hints[0]);
-    else if (s.seconds < 8) sheet.setHint("Walk slowly along the walls, about a metre from them.");
-    else sheet.setHint("Keep walking along the walls. Tilt up at the ceiling now and then.");
+    else if (s.seconds < 8) sheet.setHint("Walk slowly around the room, pointing the camera across it at furniture, corners and doors.");
+    else sheet.setHint("Keep walking. Point across the room, not at a blank wall up close.");
   }
 
   // ---- full-screen camera: tags ----------------------------------------------
@@ -262,10 +280,12 @@ export function guideScreen(): { el: HTMLElement; destroy: () => void } {
         h("p", {}, "Walk slowly around the room with the camera, like filming a video. The room's corners, door, windows " +
           "and ceiling lights become its reference points. No markers needed."),
         h("ul", { class: "tips" },
-          h("li", {}, "Lights on, phone upright at chest height"),
-          h("li", {}, "About 30–60 seconds"),
-          h("li", {}, "Get every corner, the door and the ceiling lights")),
-        h("button", { class: "primary", onclick: openScanCamera }, "Open camera"),
+          h("li", {}, "Lights on, phone upright and steady"),
+          h("li", {}, "Walk around the room, pointing across it at furniture, corners and doors"),
+          h("li", {}, "Not at a blank wall up close: it has nothing to lock onto"),
+          h("li", {}, "The bar tells you when you've got enough")),
+        roomName() ? h("p", { class: "muted" }, `Saving to: ${roomName()}`) : "",
+        h("button", { class: "primary", onclick: () => openScanCamera() }, "Open camera"),
       ),
     },
     {
@@ -279,7 +299,7 @@ export function guideScreen(): { el: HTMLElement; destroy: () => void } {
         }
         if (scan.status === "failed") {
           b.append(h("p", { class: "bad" }, scan.error || "The map couldn't be built."),
-            h("button", { class: "primary", onclick: openScanCamera }, "Scan again"));
+            h("button", { class: "primary", onclick: () => openScanCamera() }, "Scan again"));
           return;
         }
         const stages: Record<string, string> = {
@@ -296,19 +316,35 @@ export function guideScreen(): { el: HTMLElement; destroy: () => void } {
       },
     },
     {
-      id: "view",
-      title: "See it on Live",
-      isDone: () => done.has(`view-${scan.id}`),
+      id: "review",
+      title: "Review the scan",
+      isDone: () => done.has(`saved-${scan.id}`),
       render: (b) => {
-        const size = scan.room_size_m ? `about ${fmt(scan.room_size_m[0], 1)} × ${fmt(scan.room_size_m[1], 1)} m` : "";
+        const cov = scan.coverage;
+        const lay = scan.layout;
+        const size = lay?.ok ? lay.size_m : scan.room_size_m;
+        const words: Record<string, string> = { short: "Partial", enough: "Good", extra: "Very good" };
+        const canvas = h("canvas", { class: "review-map" });
         b.append(
-          h("p", { class: "good" }, `Mapped ${scan.registered ?? "?"} of ${scan.total ?? "?"} frames${size ? ` · ${size}` : ""}`),
-          h("p", { class: "muted" }, `Scale: ${scan.scale_method ?? "–"}`),
-          h("p", {}, "Open ", h("a", { href: "#live" }, "Live"),
-            " (on your laptop is best). The room appears as dots from above, with the path you walked."),
-          h("button", { class: "primary", onclick: () => markDone(`view-${scan.id}`) }, "Looks right"),
-          h("button", { class: "link-btn", onclick: openScanCamera }, "Scan again"),
+          h("p", { class: cov?.level === "short" ? "warn-text" : "good" },
+            `${words[cov?.level] ?? "Done"} scan${size ? ` · about ${fmt(size[0], 1)} × ${fmt(size[1], 1)} m` : ""}` +
+            `${roomName() ? ` · ${roomName()}` : ""}`),
+          canvas,
+          cov?.level === "short" && cov.hints?.length ? h("p", { class: "muted" }, `To improve it: ${cov.hints[0].toLowerCase()}`) : "",
+          h("button", { class: "primary", onclick: () => markDone(`saved-${scan.id}`) }, "Save room"),
+          h("button", { class: "link-btn", onclick: () => openScanCamera(scan.id) }, "Scan more (adds to this scan)"),
+          h("button", { class: "link-btn subtle", onclick: () => openScanCamera() }, "Retake from scratch"),
         );
+        // Draw the plan once the canvas is in the page.
+        requestAnimationFrame(async () => {
+          const view = new MapView(canvas);
+          try {
+            view.setScan(await conn.api(`/api/scans/${scan.id}`).then((r) => r.result));
+          } catch {
+            /* preview is optional */
+          }
+          setTimeout(() => view.destroy(), 1500); // static preview: stop the redraw loop after it has drawn
+        });
       },
     },
   ];
@@ -375,6 +411,12 @@ export function guideScreen(): { el: HTMLElement; destroy: () => void } {
     head.replaceChildren(
       h("h2", {}, current ? `Step ${steps.findIndex((s) => s.id === current) + 1} of ${steps.length}` : "All set"),
       h("div", { class: "bar" }, h("div", { style: `width:${(100 * n) / steps.length}%` })),
+      // Finished: always offer the next scan, never a dead end.
+      ...(!current && mode === "scan" ? [h("section", { class: "card next-scan" },
+        h("p", {}, roomName() ? `${roomName()} is saved.` : "Room saved."),
+        h("button", { class: "primary", onclick: () => openScanCamera() }, "New scan"),
+        scan.id ? h("button", { class: "link-btn", onclick: () => openScanCamera(scan.id) }, "Scan more of this room") : "",
+        h("p", { class: "muted" }, "Manage rooms in the Rooms tab."))] : []),
     );
     list.replaceChildren(...steps.map((s, i) => {
       const isDone = s.isDone();
@@ -421,6 +463,9 @@ export function guideScreen(): { el: HTMLElement; destroy: () => void } {
   offs.push(
     conn.on("scan", (m) => {
       if (!scan.id || m.id === scan.id || m.status === "recording") scan = { ...(m.id === scan.id ? scan : {}), ...m };
+      if (m.status === "done" && m.id === scan.id) refreshScan(); // pull the layout for the review step
+      // A new or resumed scan reopens the review for that scan.
+      if (m.status === "recording" && m.id) done.delete(`saved-${m.id}`);
       renderAll();
     }),
     conn.on("lens_view", async (m) => {

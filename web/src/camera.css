@@ -118,3 +118,7 @@ body.cam-open .tab-bar { display: none; }
 .cam-meter.bad .cam-meter-fill { background: #ff453a; }
 .cam-meter-limit { position: absolute; left: 50%; top: -3px; width: 2px; height: 12px; background: rgba(255, 255, 255, 0.85); }
 .cam-meter-label { font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; min-width: 48px; text-shadow: 0 1px 4px rgba(0, 0, 0, 0.6); }
+
+/* guide review step */
+.review-map { width: 100%; aspect-ratio: 4 / 3; border-radius: 10px; background: #14396b; display: block; margin: 8px 0; }
+.warn-text { color: var(--warn); font-weight: 600; }
