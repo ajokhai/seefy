@@ -48,6 +48,8 @@ DEFAULTS: dict = {
     "capture_fps": 5,  # frames per second the phone sends; sets the turn-speed limit
     "max_turn_deg_per_frame": 5.0,  # turning more than this between frames loses frames (real scan: 46% placed under 5°, 18% at 5-10°)
     "hfov_deg": 50.0,  # horizontal field of view used to decide which points are in view
+    "lost_min_frames": 15,  # recent frames needed before judging whether tracking is lost
+    "lost_share": 0.2,  # below this share of recent frames placed, tracking counts as lost
 }
 
 DOCS: dict = {
@@ -84,6 +86,8 @@ DOCS: dict = {
     "capture_fps": ("Frames per second", "Frames the phone sends while scanning. Sets how fast you can turn.", "fps"),
     "max_turn_deg_per_frame": ("Turn per frame", "Turning more than this between two frames breaks the map, so the app asks you to turn slower.", "°"),
     "hfov_deg": ("Field of view", "How wide the camera sees, used to work out what's in view.", "°"),
+    "lost_min_frames": ("Frames before 'lost'", "Recent frames needed before the app decides the map has lost track.", "frames"),
+    "lost_share": ("Lost track below", "If fewer than this share of recent frames are placed, the app asks you to point back at somewhere already scanned.", ""),
 }
 
 LABELS = {
@@ -105,6 +109,7 @@ HINTS = {
     "scale": "Keep the phone moving steadily so the motion sensor can measure scale",
     "detail": "Move closer to the walls and furniture so they fill the view",
     "pace": "Turn slower: the camera can't keep up",
+    "lost": "Lost track: point back at somewhere you've already scanned, then carry on slowly",
 }
 
 
@@ -165,12 +170,29 @@ def _detail(p: np.ndarray, fwd: np.ndarray, points, c: dict) -> dict:
 
 
 def score(frames: list[dict], total_frames: int, imu: dict | None, cfg: dict, *,
-          points: list | None = None, turn_dps: float | None = None) -> dict:
+          points: list | None = None, turn_dps: float | None = None,
+          recent: tuple[int, int] | None = None) -> dict:
     """Score a scan's coverage from its registered frames. See the module docstring.
 
     Optional: points, the map's 3D points (room frame), adds a "detail" component that asks
     you to move closer; turn_dps, the phone's current turn speed in degrees per second, adds
-    a "pace" component and puts "turn slower" first whenever it's over the limit."""
+    a "pace" component and puts "turn slower" first whenever it's over the limit; recent,
+    (placed, captured) for the frames since the previous live update, puts "lost track"
+    first when the map has stopped placing new frames."""
+    result = _score(frames, total_frames, imu, cfg, points=points, turn_dps=turn_dps)
+    c = {**DEFAULTS, **(cfg or {})}
+    if recent is not None:
+        placed, captured = recent
+        lost = captured >= c["lost_min_frames"] and placed / captured < c["lost_share"]
+        result["lost"] = bool(lost)
+        if lost:
+            result["hints"] = [HINTS["lost"]] + [h for h in result["hints"] if h != HINTS["lost"]][:2]
+            result["hint"] = HINTS["lost"]
+    return result
+
+
+def _score(frames: list[dict], total_frames: int, imu: dict | None, cfg: dict, *,
+           points: list | None = None, turn_dps: float | None = None) -> dict:
     c = {**DEFAULTS, **(cfg or {})}
     pace = None
     if turn_dps is not None:

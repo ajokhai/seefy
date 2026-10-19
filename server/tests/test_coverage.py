@@ -149,6 +149,16 @@ def test_hints_are_ranked_weakest_first():
     assert len(r["hints"]) >= 2 and r["hint"] == r["hints"][0]
 
 
+def test_lost_track_comes_first():
+    frames = _room_walk()[:120]
+    ok = coverage.score(frames, 120, GOOD_IMU, CFG, recent=(30, 32))
+    lost = coverage.score(frames, 400, GOOD_IMU, CFG, recent=(0, 40), turn_dps=60)
+    assert ok["lost"] is False and not ok["hint"].startswith("Lost")
+    assert lost["lost"] is True and lost["hint"].startswith("Lost track"), lost["hints"]
+    assert len(lost["hints"]) <= 3
+    assert coverage.score(frames, 120, GOOD_IMU, CFG, recent=(0, 5))["lost"] is False  # too few to judge
+
+
 def test_docs_cover_every_setting():
     assert set(coverage.DEFAULTS) <= set(coverage.DOCS)
     for k in coverage.DEFAULTS:
