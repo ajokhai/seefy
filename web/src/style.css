@@ -765,3 +765,8 @@ body[data-screen="setup"] main { max-width: 560px; margin: 0 auto; padding-botto
 .home-plan-empty.caption p { margin: 0; }
 .home-plan-empty.caption button { flex: none; }
 @media (max-width: 600px) { .home-plan-empty.caption { flex-direction: column; align-items: stretch; } }
+
+/* iOS segmented control */
+.segmented { display: flex; gap: 2px; padding: 2px; margin: 4px 0 12px; border-radius: 9px; background: var(--fill); }
+.segmented button { flex: 1; min-height: 32px; padding: 0 8px; border-radius: 7px; background: none; color: var(--fg); font-size: 14px; font-weight: 500; }
+.segmented button.on { background: var(--card); box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12); font-weight: 600; }

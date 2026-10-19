@@ -3,6 +3,13 @@
 import { conn } from "./conn";
 import { askText, confirmSheet, h, toast } from "./ui";
 
+// resources.py presets. Balanced is the default: half the cores, at low priority.
+const PRESETS = [
+  { id: "light", label: "Light", about: "About a quarter of the processor, at low priority. The Mac stays quick; maps take longest." },
+  { id: "balanced", label: "Balanced", about: "Half the processor, at low priority. Other apps come first." },
+  { id: "full", label: "Full", about: "The whole processor. Fastest maps, but the Mac will feel busy while they build." },
+];
+
 export function settingsScreen(): { el: HTMLElement; destroy: () => void } {
   const el = h("div", { class: "settings-page" });
   let wifi: any = null;
@@ -31,6 +38,13 @@ export function settingsScreen(): { el: HTMLElement; destroy: () => void } {
           h("button", { class: taught ? "link-btn" : "primary-sm", onclick: teach, disabled: wifi?.baseline === "recording" }, taught ? "Redo" : "Start"))),
       h("p", { class: "footnote" }, "Seefy uses this Mac's own WiFi connection. It notices movement at home; telling rooms apart needs more WiFi devices around the home."),
 
+      h("h3", { class: "section-title" }, "Processing"),
+      h("div", { class: "group list" },
+        row("How hard this Mac works on maps", PRESETS.find((p) => p.id === preset())?.about ?? "", null),
+        h("div", { class: "segmented", role: "radiogroup" }, ...PRESETS.map((p) =>
+          h("button", { class: preset() === p.id ? "on" : "", role: "radio", "aria-checked": String(preset() === p.id), onclick: () => setPreset(p.id) }, p.label)))),
+      h("p", { class: "footnote" }, "Applies from the next step of a map being built. Pause or stop a build from the Map tab."),
+
       h("h3", { class: "section-title" }, "Phones"),
       h("div", { class: "group list" },
         row(phones.length ? [...new Set(phones.map((d: any) => d.name))].join(", ") : "No phone connected",
@@ -46,6 +60,18 @@ export function settingsScreen(): { el: HTMLElement; destroy: () => void } {
         row("Setup with printed tags", "The original guide, for tag-based tracking", null, "#capture"),
         row("Print tags and the lens grid", null, null, "/print.html")),
     );
+  }
+
+  const preset = () => conn.config?.processing?.preset ?? "balanced";
+
+  async function setPreset(id: string) {
+    try {
+      await conn.api("/api/config", "PUT", { processing: { preset: id } });
+      conn.config = { ...conn.config, processing: { ...(conn.config?.processing ?? {}), preset: id } };
+      render();
+    } catch (e: any) {
+      toast(String(e.message ?? e));
+    }
   }
 
   async function rename() {
@@ -71,6 +97,7 @@ export function settingsScreen(): { el: HTMLElement; destroy: () => void } {
   let lastBaseline = "";
   const offs = [
     conn.on("state", render),
+    conn.on("config", render),
     conn.on("wifi", (m) => {
       wifi = m;
       const key = `${m.baseline}:${m.baseline === "recording" ? Math.ceil(m.calibrate_left_s ?? 0) : ""}`;
