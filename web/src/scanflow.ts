@@ -113,14 +113,18 @@ function nearestWall(walls: any[], p: number[]): number | null {
   return best;
 }
 
-export function startScan(opts: { roomId?: string; roomName?: string; resumeScanId?: string; skipPrep?: boolean } = {}): Promise<ScanOutcome> {
+export function startScan(opts: { spaceId?: string; mode?: "extend" | "new"; roomId?: string; roomName?: string;
+  resumeScanId?: string; skipPrep?: boolean } = {}): Promise<ScanOutcome> {
   return new Promise((resolve) => {
     const layer = h("div", { class: "flow" });
     document.body.append(layer);
     document.body.classList.add("cam-open");
     let scanId: string | null = opts.resumeScanId ?? null;
     const roomId: string | null = opts.roomId ?? conn.state?.space?.active_room ?? null;
-    const name = () => opts.roomName ?? roomName(roomId);
+    const name = () => opts.roomName ?? roomName(roomId) ?? conn.state?.space?.name ?? null;
+    // Extending: the space already has a map, so this scan should start where it overlaps.
+    const extending = () => !opts.resumeScanId && (opts.mode ?? ((conn.state?.space?.scans ?? 0) > 0 ? "extend" : "new")) === "extend";
+    let join: { status: string; joined?: boolean | null } | null = null;
     let result: any = null;
     const offs: (() => void)[] = [];
 
@@ -145,6 +149,8 @@ export function startScan(opts: { roomId?: string; roomName?: string; resumeScan
         h("div", { class: "prep-card" }, icon(ICONS.light), h("div", {}, h("b", {}, "Lights on"), h("span", {}, "The camera needs to see clearly."))),
         h("div", { class: "prep-card" }, icon(ICONS.steady), h("div", {}, h("b", {}, "Move slowly, phone steady"), h("span", {}, "Hold it upright at chest height."))),
         h("div", { class: "prep-card" }, icon(ICONS.across), h("div", {}, h("b", {}, "Point across the room"), h("span", {}, "At furniture, corners and doors. Walk around the room once."))),
+        extending() ? h("div", { class: "prep-card" }, icon(ICONS.across), h("div", {}, h("b", {}, "Start where you've already scanned"),
+          h("span", {}, "Begin in a part of your home that's on the map, then walk into the new area. Seefy joins them automatically."))) : null,
         h("div", { class: "flow-actions" },
           h("button", { class: "primary", onclick: () => camera() }, "Start scanning"),
           h("button", { class: "link-btn", onclick: () => done("cancelled") }, "Not now")),
@@ -207,7 +213,7 @@ export function startScan(opts: { roomId?: string; roomName?: string; resumeScan
           rec.onStats = (s) => coach(s);
           sheet.setShutter("recording");
           try {
-            await rec.start(resumeId);
+            await rec.start(resumeId, { space_id: opts.spaceId, room_id: opts.roomId, mode: opts.mode });
           } catch (e: any) {
             const message = e?.message ?? String(e);
             rec = null;
@@ -238,7 +244,9 @@ export function startScan(opts: { roomId?: string; roomName?: string; resumeScan
       sheet.video.srcObject = stream;
       sheet.video.play().catch(() => {});
       sheet.setStatus(name() ?? "");
-      sheet.setHint(resumeId ? "Start where you stopped, then cover what's missing." : "Tap the button and walk slowly around the room.");
+      sheet.setHint(resumeId ? "Start where you stopped, then cover what's missing."
+        : extending() ? "Start somewhere you've already scanned, then walk into the new area."
+        : "Tap the button and walk slowly around the room.");
 
       const offLive = conn.on("scan", (m) => {
         if (!rec || m.id !== rec.id || !m.live) return;
@@ -356,6 +364,21 @@ export function startScan(opts: { roomId?: string; roomName?: string; resumeScan
 
     // ---- 4. review ---------------------------------------------------------------
 
+    // Joining this scan into the space's map happens after it's processed; track it for the review.
+    offs.push(conn.on("space_map", (m) => {
+      if (!scanId || (m.scan_id && m.scan_id !== scanId)) return;
+      join = { status: m.status, joined: m.joined };
+      joinLine?.replaceChildren(joinText());
+    }));
+    let joinLine: HTMLElement | null = null;
+    const joinText = (): string => {
+      if (!join || !extending()) return "";
+      if (join.status === "joining") return "Joining to your map…";
+      if (join.status === "ready" && join.joined) return "Joined to your map ✓";
+      if (join.status === "ready") return "Saved as a separate area. Scan somewhere that connects the two to join them.";
+      return "";
+    };
+
     async function review() {
       const st = await conn.api(`/api/scans/${scanId}`).catch(() => null);
       result = st?.result ?? null;
@@ -381,6 +404,7 @@ export function startScan(opts: { roomId?: string; roomName?: string; resumeScan
         canvas,
         size ? h("p", { class: "size" }, `About ${size[0].toFixed(1)} × ${size[1].toFixed(1)} m` +
           (q?.size_source === "measured" ? " · measured" : " · estimated")) : null,
+        (joinLine = h("p", { class: "lede" }, joinText())),
         !good && main ? h("p", { class: "reason" }, main.text) : null,
         h("div", { class: "flow-actions" },
           good

@@ -38,10 +38,13 @@ export class ScanRecorder {
   }
 
   /** Start a new scan, or resume an existing one ("Scan more") to extend its map. */
-  async start(resumeId?: string): Promise<void> {
+  async start(resumeId?: string, target: { space_id?: string; room_id?: string; mode?: "extend" | "new" } = {}): Promise<void> {
     const r = resumeId
       ? await conn.api(`/api/scans/${resumeId}/resume`, "POST")
-      : await conn.api("/api/scans/start", "POST", { device: conn.id, room_id: conn.state?.space?.active_room ?? undefined });
+      : await conn.api("/api/scans/start", "POST", {
+          device: conn.id, room_id: target.room_id ?? conn.state?.space?.active_room ?? undefined,
+          space_id: target.space_id, mode: target.mode,
+        });
     this.id = r.id;
     this.running = true;
     this.started = performance.now();

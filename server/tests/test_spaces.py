@@ -43,3 +43,9 @@ def test_interrupted_scan_is_recovered_on_startup(tmp_path):
     with TestClient(create_app(tmp_path)):
         pass  # too few frames to rebuild, so it's marked failed rather than left recording
     assert json.loads(meta.read_text())["status"] == "failed"
+
+
+def test_room_names_follow_their_point():
+    from seefy.spaces import _inside
+    square = [[0, 0], [4, 0], [4, 3], [0, 3]]
+    assert _inside([1, 1], square) and not _inside([5, 1], square)

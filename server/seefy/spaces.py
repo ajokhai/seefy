@@ -21,6 +21,18 @@ from pathlib import Path
 OVERRIDE_KEYS = ("outline", "size_m", "walls", "objects")
 
 
+def _inside(p: list[float], poly: list[list[float]]) -> bool:
+    """Point-in-polygon (ray casting)."""
+    x, y = p
+    inside = False
+    for i in range(len(poly)):
+        x1, y1 = poly[i][:2]
+        x2, y2 = poly[(i + 1) % len(poly)][:2]
+        if (y1 > y) != (y2 > y) and x < x1 + (y - y1) * (x2 - x1) / (y2 - y1):
+            inside = not inside
+    return inside
+
+
 def _new_id() -> str:
     return secrets.token_hex(4)
 
@@ -33,6 +45,21 @@ class Spaces:
         self.data = {"active": None, "spaces": {}}
         if path.exists():
             self.data = json.loads(path.read_text())
+        self._migrate()
+
+    def _migrate(self) -> None:
+        """Spaces are maps built from many scans: give older spaces a scan list taken from their rooms."""
+        changed = False
+        for sp in self.data["spaces"].values():
+            if "scans" not in sp:
+                rooms = sorted(sp["rooms"].values(), key=lambda r: r["created"])
+                sp["scans"] = [r["scan_id"] for r in rooms if r.get("scan_id")]
+                sp.setdefault("map_status", "none")
+                sp.setdefault("pieces", [])
+                sp.setdefault("region_names", {})
+                changed = True
+        if changed:
+            self._save()
 
     def _save(self) -> None:
         tmp = self.path.with_suffix(".tmp")
@@ -78,7 +105,9 @@ class Spaces:
     def space_view(self, space: dict, with_layout: bool = True) -> dict:
         rooms = sorted(space["rooms"].values(), key=lambda r: (r.get("order", 0), r["created"]))
         return {"id": space["id"], "name": space["name"], "created": space["created"],
-                "active_room": space.get("active_room"), "rooms": [self.room_view(r, with_layout) for r in rooms]}
+                "active_room": space.get("active_room"), "rooms": [self.room_view(r, with_layout) for r in rooms],
+                "scans": space.get("scans", []), "map_status": space.get("map_status", "none"),
+                "pieces": space.get("pieces", []), "region_names": space.get("region_names", {})}
 
     def list(self) -> dict:
         return {"active": self.data["active"],
@@ -91,6 +120,8 @@ class Spaces:
             return None
         rooms = sorted(sp["rooms"].values(), key=lambda r: (r.get("order", 0), r["created"]))
         return {"id": sp["id"], "name": sp["name"], "active_room": sp.get("active_room"),
+                "scans": len(sp.get("scans", [])), "map_status": sp.get("map_status", "none"),
+                "pieces": len(sp.get("pieces", [])),
                 "rooms": [{"id": r["id"], "name": r["name"], "scan_id": r.get("scan_id"),
                            "level": (self._scan_summary(r.get("scan_id")) or {}).get("level")} for r in rooms]}
 
@@ -121,7 +152,8 @@ class Spaces:
         with self.lock:
             sid = _new_id()
             self.data["spaces"][sid] = {"id": sid, "name": name.strip()[:80] or "My home", "created": time.time(),
-                                        "active_room": None, "rooms": {}}
+                                        "active_room": None, "rooms": {}, "scans": [], "map_status": "none",
+                                        "pieces": [], "region_names": {}}
             if not self.data["active"]:
                 self.data["active"] = sid
             self._save()
@@ -134,6 +166,13 @@ class Spaces:
                 return None
             if "name" in changes:
                 sp["name"] = str(changes["name"]).strip()[:80] or sp["name"]
+            if isinstance(changes.get("region_names"), dict):
+                # Room ids change when the layout is rebuilt, so a name is pinned to a point instead.
+                names = {}
+                for k, v in changes["region_names"].items():
+                    if isinstance(v, dict) and v.get("name") and len(v.get("at") or []) == 2:
+                        names[str(k)] = {"name": str(v["name"])[:60], "at": [float(v["at"][0]), float(v["at"][1])]}
+                sp["region_names"] = names
             if changes.get("active"):
                 self.data["active"] = sid
             if "active_room" in changes and changes["active_room"] in sp["rooms"]:
@@ -209,6 +248,44 @@ class Spaces:
                 r["layout_overrides"], r["overrides_scan_id"] = {}, None  # edits belonged to the old scan
             self._save()
             return r
+
+    def name_rooms(self, sid: str, layout: dict | None) -> None:
+        """Give each layout room the name whose pinned point falls inside its outline."""
+        sp = self.get(sid)
+        if not sp or not layout or not layout.get("rooms"):
+            return
+        for room in layout["rooms"]:
+            for v in sp.get("region_names", {}).values():
+                if _inside(v["at"], room.get("outline") or []):
+                    room["name"] = v["name"]
+                    break
+
+    def add_scan(self, sid: str, scan_id: str) -> None:
+        with self.lock:
+            sp = self.get(sid)
+            if sp is not None and scan_id not in sp.setdefault("scans", []):
+                sp["scans"].append(scan_id)
+                self._save()
+
+    def set_map(self, sid: str, status: str, pieces: list | None = None) -> None:
+        with self.lock:
+            sp = self.get(sid)
+            if sp is None:
+                return
+            sp["map_status"] = status
+            if pieces is not None:
+                sp["pieces"] = pieces
+            self._save()
+
+    def target(self, space_id: str | None, room_id: str | None) -> tuple[str, str]:
+        """Where a new scan goes: the given space (and its active room), else target_room()."""
+        sp = self.get(space_id) if space_id else None
+        if sp is None:
+            return self.target_room(room_id)
+        rid = room_id if room_id in sp["rooms"] else sp.get("active_room")
+        if not rid or rid not in sp["rooms"]:
+            rid = self.create_room(sp["id"], "")["id"]
+        return sp["id"], rid
 
     def target_room(self, room_id: str | None) -> tuple[str, str]:
         """Where a new scan goes: the given room, else the active room, creating a home/room if needed."""

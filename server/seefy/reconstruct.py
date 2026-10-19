@@ -180,6 +180,11 @@ class Mapper:
         opts.mapper.abs_pose_min_num_inliers = self.cfg["register_min_inliers"]
         opts.mapper.abs_pose_min_inlier_ratio = 0.15
         opts.extract_colors = True
+        # Don't let bundle adjustment re-estimate the lens from a handful of frames: on a real scan the
+        # focal length ran from 896 to 1853 px right after the first pair. Refine only once the map is big.
+        small = self.rec is None or self.rec.num_reg_images() < self.cfg.get("refine_lens_after_frames", 40)
+        opts.ba_refine_focal_length = not small
+        opts.ba_refine_extra_params = not small
         out = self.work / "sparse"
         if out.exists():
             shutil.rmtree(out)

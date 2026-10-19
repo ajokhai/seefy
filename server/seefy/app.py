@@ -21,6 +21,7 @@ from .metrics import MetricsLog
 from .recorder import Recorder
 from .scan import ScanStore
 from .spaces import Spaces
+from .spacemap import SpaceMap
 from .wifi import live as wifi_live
 from .tagmap import TagMap
 
@@ -38,6 +39,37 @@ def create_app(data: Path, public_url: str = "") -> FastAPI:
     hub.scans = scans
     spaces = Spaces(data / "spaces.json", scans)
     hub.spaces = spaces
+    space_maps: dict[str, SpaceMap] = {}
+    joining = asyncio.Lock()  # one space join at a time; joins share the CPU with live mapping
+
+    def space_map(space_id: str) -> SpaceMap:
+        if space_id not in space_maps:
+            space_maps[space_id] = SpaceMap(data / "spaces" / space_id, data / "scans", cfg["scan"])
+        return space_maps[space_id]
+
+    async def join_space(space_id: str, scan_id: str | None = None) -> None:
+        """Rebuild the space's merged map with all its scans, joining the new one where it overlaps."""
+        sp = spaces.get(space_id)
+        if not sp or not sp.get("scans"):
+            return
+        spaces.set_map(space_id, "joining")
+        await hub.broadcast({"type": "space_map", "space_id": space_id, "status": "joining", "scan_id": scan_id})
+        async with joining:
+            try:
+                res = await asyncio.to_thread(space_map(space_id).build, list(sp["scans"]), cfg["coverage"],
+                                              cfg["quality"], sp.get("measured_scale"))
+            except Exception as exc:  # a failed join must never leave the space stuck on "joining"
+                res = {"ok": False, "error": f"joining failed: {exc}", "pieces": sp.get("pieces", [])}
+        pieces = res.get("pieces", [])
+        spaces.set_map(space_id, "ready" if res.get("ok") else "none", pieces)
+        joined = bool(res.get("joined", {}).get(scan_id)) if scan_id else None
+        metrics.event("space_join", space_id=space_id, scan_id=scan_id, ok=res.get("ok"), joined=joined,
+                      pieces=len(pieces), registered=res.get("registered"), total=res.get("total"),
+                      timings_s=res.get("timings_s"), error=res.get("error"))
+        await hub.broadcast({"type": "space_map", "space_id": space_id, "status": "ready" if res.get("ok") else "failed",
+                             "scan_id": scan_id, "joined": joined, "pieces": pieces,
+                             "quality": res.get("quality"), "error": res.get("error")})
+        await hub.broadcast({"type": "space", "space": spaces.summary()})
     processing = asyncio.Lock()  # one reconstruction at a time
 
     @asynccontextmanager
@@ -151,14 +183,15 @@ def create_app(data: Path, public_url: str = "") -> FastAPI:
 
     @app.post("/api/scans/start")
     async def scan_start(body: dict = Body(default={})):
-        space_id, room_id = spaces.target_room(body.get("room_id"))
+        space_id, room_id = spaces.target(body.get("space_id"), body.get("room_id"))
         s = scans.start(str(body.get("device", ""))[:64])
         s.lens = lens.get(str(body.get("device", ""))[:64])
-        s.update_meta(space_id=space_id, room_id=room_id)
+        mode = body.get("mode") or ("extend" if spaces.get(space_id).get("scans") else "new")
+        s.update_meta(space_id=space_id, room_id=room_id, mode=mode)
         metrics.event("scan_start", id=s.id, device=body.get("device"), room_id=room_id)
         await hub.broadcast({"type": "scan", "id": s.id, "room_id": room_id, "status": "recording"})
         asyncio.create_task(live_mapping(s))
-        return {"id": s.id, "room_id": room_id, "space_id": space_id, "settings": cfg["scan"]}
+        return {"id": s.id, "room_id": room_id, "space_id": space_id, "mode": mode, "settings": cfg["scan"]}
 
     @app.post("/api/scans/{sid}/scale")
     async def scan_scale(sid: str, body: dict = Body(...)):
@@ -259,6 +292,10 @@ def create_app(data: Path, public_url: str = "") -> FastAPI:
         meta = s.meta()
         if result["ok"] and meta.get("space_id") and meta.get("room_id"):
             spaces.activate_scan(meta["space_id"], meta["room_id"], s.id)  # a good scan becomes the room's map
+        if meta.get("space_id") and s.count >= 10:
+            # Every scan goes into its space's map, even a weak one: it may still join through shared views.
+            spaces.add_scan(meta["space_id"], s.id)
+            asyncio.create_task(join_space(meta["space_id"], s.id))
         await hub.broadcast({"type": "scan", "id": s.id, "room_id": meta.get("room_id"),
                              "status": "done" if result["ok"] else "failed", **summary})
         await hub.broadcast({"type": "space", "space": spaces.summary()})
@@ -328,7 +365,29 @@ def create_app(data: Path, public_url: str = "") -> FastAPI:
         m = spaces.map(sid)
         if not m:
             raise HTTPException(404, "no such space")
+        merged = space_map(sid).result() if spaces.get(sid).get("scans") else None
+        if not merged or not merged.get("ok"):
+            # Not joined yet: fall back to the newest finished scan in the space.
+            for r in reversed(m["rooms"]):
+                if r.get("map"):
+                    merged = r["map"]
+                    break
+        if merged:
+            merged = dict(merged)
+            merged["layout"] = dict(merged.get("layout") or {})
+            spaces.name_rooms(sid, merged["layout"])
+        m["map"] = merged
+        m["status"] = spaces.get(sid).get("map_status", "none")
+        m["pieces"] = spaces.get(sid).get("pieces", [])
         return m
+
+    @app.post("/api/spaces/{sid}/join")
+    async def spaces_join(sid: str):
+        """Rebuild the space's merged map now (e.g. after settings change)."""
+        if not spaces.get(sid):
+            raise HTTPException(404, "no such space")
+        asyncio.create_task(join_space(sid))
+        return {"ok": True}
 
     @app.post("/api/spaces/{sid}/rooms")
     async def rooms_create(sid: str, body: dict = Body(default={})):
