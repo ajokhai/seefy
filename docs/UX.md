@@ -111,6 +111,24 @@ last scanned date. Tapping opens the room: big plan, [Rescan] [Edit walls & furn
 ⋯ menu (Rename, Check accuracy — under Advanced styling, Delete). Edit on the phone: drag
 corners and doors, tap furniture to rename or delete. Same editor on the Mac with more room.
 
+## Quality bar: Airbnb (Josh)
+
+"Think about how nice Airbnb's app is." Concretely, what we copy:
+- **Imagery leads.** Every space is a card with a **cover photo** (the sharpest frame from its
+  scans) and its floor plan; text sits under it, short. The floor plan is our hero image.
+- **Calm, confident type.** Large bold titles (28–32 pt), one short line of grey supporting text,
+  no walls of text. Sentence case. Numbers only where they mean something.
+- **Generous space, soft shapes.** 24 px gutters, 16–20 px corner radii, soft shadows instead of
+  hairlines, one accent colour for the single primary action.
+- **Flows feel guided.** Multi-step tasks are full screens with a thin progress bar on top and a
+  sticky footer: "Back" as a text link on the left, the primary button on the right.
+- **Secondary tasks in bottom sheets** (rename, name a room, scan options) that slide up over the
+  current screen, never a browser prompt() or confirm().
+- **Never a blank or a spinner alone:** skeleton placeholders while loading, friendly empty states
+  with one action, undo instead of "are you sure?" where possible.
+- **Small delights:** smooth transitions between steps (under 300 ms), a satisfying ✓ when a scan
+  joins the map, haptic-like feedback on the shutter.
+
 ## Visual style
 
 - **Floor plans look like real floor plans**, not a radar: light floor, dark grey walls of real
