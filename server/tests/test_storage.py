@@ -34,18 +34,36 @@ def test_usage_counts_what_trimming_frees(tmp_path):
 def test_trim_keeps_the_finished_map(tmp_path):
     d = _scan(tmp_path, "s1")
     r = storage.trim_scan(tmp_path, "s1")
-    assert r["freed_bytes"] == 8200
+    assert r["freed_bytes"] == 8200 and r["undo"]
     assert not (d / "frames").exists() and not (d / "recon" / "database.db").exists()
     assert (d / "recon" / "result.json").exists() and (d / "recon" / "model" / "points3D.bin").exists()
     assert json.loads((d / "meta.json").read_text())["trimmed"] is True
     assert storage.scan_usage(tmp_path, "s1")["freeable_bytes"] == 0
-    assert storage.trim_scan(tmp_path, "s1")["freed_bytes"] == 0  # trimming twice is harmless
+    again = storage.trim_scan(tmp_path, "s1")  # trimming twice is harmless
+    assert again["freed_bytes"] == 0 and again["undo"] is None
 
 
-def test_delete_removes_the_scan(tmp_path):
+def test_trim_then_undo_puts_everything_back(tmp_path):
     d = _scan(tmp_path, "s1")
-    assert storage.delete_scan(tmp_path, "s1")["freed_bytes"] > 8000
-    assert not d.exists()
+    r = storage.trim_scan(tmp_path, "s1")
+    storage.restore(tmp_path, r["undo"])
+    assert len(list((d / "frames").iterdir())) == 3 and (d / "recon" / "database.db").exists()
+    assert "trimmed" not in json.loads((d / "meta.json").read_text())
+    assert storage.usage(tmp_path)["trash_bytes"] == 0
+
+
+def test_delete_then_undo_and_purge(tmp_path):
+    d = _scan(tmp_path, "s1")
+    r = storage.delete_scan(tmp_path, "s1")
+    assert r["freed_bytes"] > 8000 and not d.exists()
+    assert storage.usage(tmp_path)["trash_bytes"] > 8000  # space comes back only after purge
+    storage.restore(tmp_path, r["undo"])
+    assert (d / "frames" / "00000.jpg").exists()
+    r = storage.delete_scan(tmp_path, "s1")
+    assert storage.purge_trash(tmp_path, older_than_s=3600)["freed_bytes"] == 0  # still in the undo window
+    assert storage.purge_trash(tmp_path)["freed_bytes"] > 8000
+    with pytest.raises(storage.StorageError):
+        storage.restore(tmp_path, r["undo"])
 
 
 @pytest.mark.parametrize("status", ["recording", "processing"])

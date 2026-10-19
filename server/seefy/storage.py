@@ -9,7 +9,10 @@ is a few MB. So there are two ways to free space:
                (the room still shows; "Scan more" and rebuilding are no longer possible)
   delete_scan  remove the whole scan
 
-Both refuse while a scan is recording or processing. Pure file operations, no server state.
+Both refuse while a scan is recording or processing. Neither destroys anything straight away:
+the removed files move to data/trash, so the app can offer Undo (restore) instead of an
+"are you sure?" prompt, and purge_trash frees the space once the undo window has passed.
+Pure file operations, no server state.
 """
 
 from __future__ import annotations
@@ -18,6 +21,7 @@ import json
 import os
 import re
 import shutil
+import time
 from pathlib import Path
 
 BUSY = {"recording", "processing"}
@@ -90,7 +94,24 @@ def usage(data: Path) -> dict:
                 items.append(scan_usage(data, d.name))
     disk = shutil.disk_usage(Path(data) if Path(data).exists() else Path.home())
     return {"scans": items, "bytes": sum(s["bytes"] for s in items),
-            "freeable_bytes": sum(s["freeable_bytes"] for s in items), "disk_free_bytes": disk.free}
+            "freeable_bytes": sum(s["freeable_bytes"] for s in items), "disk_free_bytes": disk.free,
+            "trash_bytes": _size(Path(data) / "trash")}
+
+
+def _to_trash(data: Path, sid: str, kind: str, paths: dict[str, Path]) -> str:
+    """Move paths (keyed by their path inside the scan) into one trash entry; returns its id."""
+    tid = f"{sid}.{kind}.{int(time.time() * 1000)}"
+    entry = Path(data) / "trash" / tid
+    entry.mkdir(parents=True)
+    moved = []
+    for rel, p in paths.items():
+        if p.exists() or p.is_symlink():
+            dest = entry / "files" / rel
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            p.rename(dest)  # same disk, so this is instant and needs no extra space
+            moved.append(rel)
+    (entry / "trash.json").write_text(json.dumps({"scan": sid, "kind": kind, "at": time.time(), "paths": moved}))
+    return tid
 
 
 def _write_meta(d: Path, meta: dict) -> None:
@@ -100,29 +121,62 @@ def _write_meta(d: Path, meta: dict) -> None:
 
 
 def trim_scan(data: Path, sid: str) -> dict:
-    """Remove a scan's photos and working files, keep its finished map. Returns bytes freed."""
+    """Move a scan's photos and working files to the trash, keep its finished map.
+    Returns the bytes that will be freed and an undo id for restore()."""
     d = _scan_dir(data, sid)
     meta = _check_idle(d)
-    freed = 0
-    for rel in TRIMMABLE:
-        p = d / rel
-        freed += _size(p)
-        if p.is_dir() and not p.is_symlink():
-            shutil.rmtree(p)
-        elif p.exists() or p.is_symlink():
-            p.unlink()
+    freed = sum(_size(d / rel) for rel in TRIMMABLE)
+    undo = _to_trash(data, sid, "trim", {rel: d / rel for rel in TRIMMABLE}) if freed else None
     meta["trimmed"] = True
     _write_meta(d, meta)
-    return {"id": sid, "freed_bytes": freed}
+    return {"id": sid, "freed_bytes": freed, "undo": undo}
 
 
 def delete_scan(data: Path, sid: str) -> dict:
-    """Remove a whole scan. Returns bytes freed."""
+    """Move a whole scan to the trash. Returns the bytes that will be freed and an undo id."""
     d = _scan_dir(data, sid)
     _check_idle(d)
     freed = _size(d)
-    shutil.rmtree(d)
-    return {"id": sid, "freed_bytes": freed}
+    return {"id": sid, "freed_bytes": freed, "undo": _to_trash(data, sid, "delete", {"": d})}
+
+
+def restore(data: Path, undo: str) -> dict:
+    """Undo a trim or delete that's still in the trash."""
+    entry = (Path(data) / "trash" / undo).resolve()
+    if not _SID.match(undo) or entry.parent != (Path(data) / "trash").resolve() or not entry.is_dir():
+        raise StorageError("That can't be undone any more.")
+    info = json.loads((entry / "trash.json").read_text())
+    scan = Path(data) / "scans" / info["scan"]
+    if info["kind"] == "delete":
+        if scan.exists():
+            raise StorageError("A scan with that name already exists.")
+        (entry / "files").rename(scan)
+    else:
+        for rel in info["paths"]:
+            dest = scan / rel
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            (entry / "files" / rel).rename(dest)
+        meta = _meta(scan)
+        meta.pop("trimmed", None)
+        _write_meta(scan, meta)
+    shutil.rmtree(entry)
+    return {"id": info["scan"], "restored": info["kind"]}
+
+
+def purge_trash(data: Path, older_than_s: float = 0.0) -> dict:
+    """Permanently remove trash entries older than this many seconds. Returns bytes freed."""
+    trash = Path(data) / "trash"
+    freed, now = 0, time.time()
+    if trash.is_dir():
+        for entry in trash.iterdir():
+            try:
+                at = json.loads((entry / "trash.json").read_text())["at"]
+            except (OSError, ValueError, KeyError):
+                at = entry.stat().st_mtime
+            if now - at >= older_than_s:
+                freed += _size(entry)
+                shutil.rmtree(entry, ignore_errors=True)
+    return {"freed_bytes": freed}
 
 
 def human(n: int) -> str:
