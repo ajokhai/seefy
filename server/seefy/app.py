@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import shutil
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -19,6 +20,7 @@ from .hub import Hub
 from .lens import LensStore
 from .metrics import MetricsLog
 from .recorder import Recorder
+from . import jobs as jobs_mod
 from . import resources
 from .scan import ScanStore
 from .spaces import Spaces
@@ -45,7 +47,6 @@ def create_app(data: Path, public_url: str = "") -> FastAPI:
         return {**cfg["scan"], "processing": cfg["processing"]}
 
     space_maps: dict[str, SpaceMap] = {}
-    joining = asyncio.Lock()  # one space join at a time; joins share the CPU with live mapping
 
     def space_map(space_id: str) -> SpaceMap:
         if space_id not in space_maps:
@@ -53,47 +54,145 @@ def create_app(data: Path, public_url: str = "") -> FastAPI:
         space_maps[space_id].cfg = scan_cfg()  # pick up settings changes
         return space_maps[space_id]
 
-    async def join_space(space_id: str, scan_id: str | None = None) -> None:
-        """Rebuild the space's merged map with all its scans, joining the new one where it overlaps."""
+    # -- background jobs (jobs.py): map building and joining run in child processes, one at a time,
+    # within the Processing limits, and can be paused, resumed or cancelled from the app.
+    loop_ref: dict = {}
+    job_targets: dict[str, dict] = {}  # job id -> {"kind": "scan", "scan_id"} or {"kind": "join", "space_id", "scan_id"}
+    handled: set[str] = set()
+
+    def jobs_view(snapshot: list[dict] | None = None) -> list[dict]:
+        return [{**j, **{k: v for k, v in job_targets.get(j["id"], {}).items() if k != "kind"}}
+                for j in (runner.snapshot() if snapshot is None else snapshot)]
+
+    def jobs_changed(snapshot: list[dict]) -> None:  # called on the runner's thread
+        loop = loop_ref.get("loop")
+        if loop and not loop.is_closed():
+            loop.call_soon_threadsafe(lambda: asyncio.ensure_future(on_jobs(snapshot)))
+
+    runner = jobs_mod.JobRunner(on_change=jobs_changed)
+
+    async def on_jobs(snapshot: list[dict]) -> None:
+        await hub.broadcast({"type": "jobs", "jobs": jobs_view(snapshot)})
+        for j in snapshot:
+            if j["state"] in ("done", "failed", "cancelled") and j["id"] in job_targets and j["id"] not in handled:
+                handled.add(j["id"])
+                info, full = job_targets[j["id"]], runner.get(j["id"]) or j
+                if info["kind"] == "scan":
+                    await scan_finished(info["scan_id"], full)
+                else:
+                    await join_finished(info["space_id"], info.get("scan_id"), full)
+
+    def active_job(**match) -> str | None:
+        """The queued, running or paused job for a scan or space, if any."""
+        for j in runner.snapshot():
+            info = job_targets.get(j["id"], {})
+            if j["state"] in ("queued", *jobs_mod.ACTIVE) and all(info.get(k) == v for k, v in match.items()):
+                return j["id"]
+        return None
+
+    def submit_scan(s, fresh: bool = False) -> str:
+        """Queue building a scan's map. Continues from the map saved so far unless fresh."""
+        meta = s.meta()
+        s.mapper = None  # the job picks the saved map up from disk
+        s.update_meta(status="queued", error="")
+        jid = runner.submit("scan", f"Building the map for {meta.get('name') or 'scan ' + s.id}", "seefy.scan:process_job",
+                            {"scan_dir": str(s.dir), "cfg": scan_cfg(), "coverage_cfg": cfg["coverage"],
+                             "quality_cfg": cfg["quality"], "lens": lens.get(meta.get("device", "")) or s.lens,
+                             "fresh": fresh}, plan=resources.plan(cfg["processing"]))
+        job_targets[jid] = {"kind": "scan", "scan_id": s.id}
+        return jid
+
+    async def scan_finished(sid: str, job: dict) -> None:
+        s = scans.get(sid)
+        if not s:
+            return
+        meta = s.meta()
+        if job["state"] == "cancelled":
+            s.update_meta(status="stopped")
+            metrics.event("scan_job_cancelled", id=sid, elapsed_s=job.get("elapsed_s"))
+            await hub.broadcast({"type": "scan", "id": sid, "room_id": meta.get("room_id"), "status": "stopped"})
+            return
+        summary = job.get("result") or {"ok": False, "error": job.get("error") or "processing failed"}
+        if job["state"] == "failed":
+            meta = s.update_meta(status="failed", error=summary["error"])
+        metrics.event("scan_processed", id=sid, **summary, elapsed_s=job.get("elapsed_s"),
+                      peak_ram_mb=job.get("peak_ram_mb"), cores_limit=job.get("cores_limit"))
+        if summary.get("ok") and meta.get("space_id") and meta.get("room_id"):
+            spaces.activate_scan(meta["space_id"], meta["room_id"], sid)  # a good scan becomes the room's map
+        if meta.get("space_id") and s.count >= 10:
+            # Every scan goes into its space's map, even a weak one: it may still join through shared views.
+            spaces.add_scan(meta["space_id"], sid)
+            await join_space(meta["space_id"], sid)
+        await hub.broadcast({"type": "scan", "id": sid, "room_id": meta.get("room_id"),
+                             "status": "done" if summary.get("ok") else "failed", **summary})
+        await hub.broadcast({"type": "space", "space": spaces.summary()})
+
+    def space_map_ok(space_id: str) -> bool:
+        return bool((space_map(space_id).result() or {}).get("ok"))
+
+    async def join_space(space_id: str, scan_id: str | None = None) -> str | None:
+        """Queue rebuilding the space's merged map with all its scans, joining the new one where it overlaps."""
         sp = spaces.get(space_id)
         if not sp or not sp.get("scans"):
-            return
+            return None
+        queued = active_job(kind="join", space_id=space_id)
+        if queued and (runner.get(queued) or {}).get("state") == "queued":
+            runner.cancel(queued)  # replaced by this one, which includes every scan
+            handled.add(queued)
         spaces.set_map(space_id, "joining")
+        jid = runner.submit("join", f"Joining scans into {sp['name']}", "seefy.spacemap:join_job",
+                            {"root": str(data / "spaces" / space_id), "scans_root": str(data / "scans"),
+                             "cfg": scan_cfg(), "scan_ids": list(sp["scans"]), "coverage_cfg": cfg["coverage"],
+                             "quality_cfg": cfg["quality"], "measured_scale": sp.get("measured_scale")},
+                            plan=resources.plan(cfg["processing"]))
+        job_targets[jid] = {"kind": "join", "space_id": space_id, "scan_id": scan_id}
         await hub.broadcast({"type": "space_map", "space_id": space_id, "status": "joining", "scan_id": scan_id})
-        async with joining:
-            try:
-                res = await asyncio.to_thread(space_map(space_id).build, list(sp["scans"]), cfg["coverage"],
-                                              cfg["quality"], sp.get("measured_scale"))
-            except Exception as exc:  # a failed join must never leave the space stuck on "joining"
-                res = {"ok": False, "error": f"joining failed: {exc}", "pieces": sp.get("pieces", [])}
-        pieces = res.get("pieces", [])
+        return jid
+
+    async def join_finished(space_id: str, scan_id: str | None, job: dict) -> None:
+        sp = spaces.get(space_id)
+        if not sp:
+            return
+        if job["state"] == "cancelled":
+            spaces.set_map(space_id, "ready" if space_map_ok(space_id) else "none", sp.get("pieces", []))
+            await hub.broadcast({"type": "space_map", "space_id": space_id, "status": "stopped", "scan_id": scan_id})
+            await hub.broadcast({"type": "space", "space": spaces.summary()})
+            return
+        res = job.get("result") or {"ok": False, "error": job.get("error") or "joining failed"}
+        pieces = res.get("pieces") or ([] if res.get("ok") else sp.get("pieces", []))
         spaces.set_map(space_id, "ready" if res.get("ok") else "none", pieces)
-        joined = bool(res.get("joined", {}).get(scan_id)) if scan_id else None
+        joined = bool((res.get("joined") or {}).get(scan_id)) if scan_id else None
         metrics.event("space_join", space_id=space_id, scan_id=scan_id, ok=res.get("ok"), joined=joined,
                       pieces=len(pieces), registered=res.get("registered"), total=res.get("total"),
-                      timings_s=res.get("timings_s"), error=res.get("error"))
+                      timings_s=res.get("timings_s"), error=res.get("error"), elapsed_s=job.get("elapsed_s"),
+                      peak_ram_mb=job.get("peak_ram_mb"))
         await hub.broadcast({"type": "space_map", "space_id": space_id, "status": "ready" if res.get("ok") else "failed",
                              "scan_id": scan_id, "joined": joined, "pieces": pieces,
                              "quality": res.get("quality"), "error": res.get("error")})
         await hub.broadcast({"type": "space", "space": spaces.summary()})
-    processing = asyncio.Lock()  # one reconstruction at a time
+
+    processing = asyncio.Lock()  # one live map update at a time
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
+        loop_ref["loop"] = asyncio.get_running_loop()
         hub.start()
         wifi.start()
-        # Scans interrupted by a restart (recording, queued or processing) are finished now,
-        # from their saved frames, so nothing is left stuck "processing" forever.
+        # Work interrupted by a restart isn't restarted on its own (it would load the Mac straight away):
+        # scans become "stopped" with their frames and map so far kept, and Resume in the app continues them.
         for m in scans.list():
             if m.get("status") in ("recording", "queued", "processing"):
                 s = scans.get(m["id"])
                 if s and s.count >= 10:
-                    s.update_meta(status="queued", recovered=time.time())
+                    s.update_meta(status="stopped", recovered=time.time())
                     metrics.event("scan_recovered", id=s.id, was=m.get("status"), frames=s.count)
-                    asyncio.create_task(process_scan(s))
                 elif s:
                     s.update_meta(status="failed", error="interrupted before enough video was saved")
+        for sp in list(spaces.data["spaces"].values()):
+            if sp.get("map_status") == "joining":
+                spaces.set_map(sp["id"], "ready" if space_map_ok(sp["id"]) else "none", sp.get("pieces", []))
         yield
+        await asyncio.to_thread(runner.shutdown)
         await wifi.stop()
         await hub.stop()
 
@@ -252,23 +351,86 @@ def create_app(data: Path, public_url: str = "") -> FastAPI:
             raise HTTPException(404, "no such scan")
         meta = s.update_meta(status="queued", stopped=time.time(), frames=s.count)
         metrics.event("scan_stop", id=sid, frames=s.count, duration_s=round(meta["stopped"] - meta["started"], 1))
-        asyncio.create_task(process_scan(s))
+        if s.mapper is not None:  # let a live update that's still running finish writing the map
+            await asyncio.to_thread(lambda: (s.mapper.lock.acquire(), s.mapper.lock.release()))
+        submit_scan(s)
         await hub.broadcast({"type": "scan", "id": sid, "status": "queued", "frames": s.count})
         return meta
 
     @app.post("/api/scans/{sid}/reprocess")
     async def scan_reprocess(sid: str):
         """Rebuild a scan's map from its saved frames, e.g. after changing settings."""
+        return await queue_scan(sid, fresh=True)
+
+    @app.post("/api/scans/{sid}/continue")
+    async def scan_continue(sid: str):
+        """Resume building a stopped (or failed) scan's map from where it got to."""
+        return await queue_scan(sid, fresh=False)
+
+    async def queue_scan(sid: str, fresh: bool) -> dict:
         s = scans.get(sid)
-        if not s or s.meta().get("status") in ("recording", "queued", "processing"):
+        if not s or s.meta().get("status") in ("recording", "queued", "processing") or active_job(scan_id=sid):
             raise HTTPException(409, "scan is busy or missing")
-        s.mapper = None  # start the map from scratch with the current settings
-        s.lens = lens.get(s.meta().get("device", ""))
-        s.update_meta(status="queued")
-        metrics.event("scan_reprocess", id=sid)
-        asyncio.create_task(process_scan(s))
+        if s.count < 10:
+            raise HTTPException(400, "this scan has too few frames to build a map")
+        metrics.event("scan_reprocess" if fresh else "scan_continue", id=sid)
+        submit_scan(s, fresh=fresh)
         await hub.broadcast({"type": "scan", "id": sid, "status": "queued", "frames": s.count})
         return s.meta()
+
+    @app.patch("/api/scans/{sid}")
+    async def scan_update(sid: str, body: dict = Body(default={})):
+        """Rename a scan."""
+        s = scans.get(sid)
+        if not s:
+            raise HTTPException(404, "no such scan")
+        meta = s.update_meta(name=str(body.get("name", "")).strip()[:80])
+        await hub.broadcast({"type": "scan", "id": sid, "status": meta.get("status"), "name": meta["name"]})
+        return meta
+
+    @app.delete("/api/scans/{sid}")
+    async def scan_delete(sid: str):
+        """Delete a scan: its frames move to data/trash, and it leaves its space's map."""
+        s = scans.get(sid)
+        if not s:
+            raise HTTPException(404, "no such scan")
+        if s.meta().get("status") == "recording":
+            raise HTTPException(409, "stop recording first")
+        jid = active_job(scan_id=sid)
+        if jid:
+            handled.add(jid)
+            await asyncio.to_thread(runner.cancel, jid)
+        for space_id in spaces.forget_scan(sid):
+            # The space's map was built with this scan's photos: drop it; Rebuild makes it from the rest.
+            jid = active_job(kind="join", space_id=space_id)
+            if jid:
+                handled.add(jid)
+                await asyncio.to_thread(runner.cancel, jid)
+            shutil.rmtree(data / "spaces" / space_id, ignore_errors=True)
+            space_maps.pop(space_id, None)
+            spaces.set_map(space_id, "none", [])
+        scans.remove(sid)
+        metrics.event("scan_delete", id=sid)
+        await hub.broadcast({"type": "scan", "id": sid, "status": "deleted"})
+        await hub.broadcast({"type": "space", "space": spaces.summary()})
+        return {"ok": True}
+
+    # -- jobs ------------------------------------------------------------------
+
+    @app.get("/api/jobs")
+    def jobs_list():
+        return {"jobs": jobs_view()}
+
+    @app.post("/api/jobs/{jid}/{action}")
+    async def jobs_action(jid: str, action: str):
+        fn = {"pause": runner.pause, "resume": runner.resume, "cancel": runner.cancel}.get(action)
+        if not fn:
+            raise HTTPException(404, "pause, resume or cancel")
+        ok = await asyncio.to_thread(fn, jid)
+        if not ok:
+            raise HTTPException(409, f"can't {action} that job now")
+        metrics.event(f"job_{action}", job=jid, **{k: v for k, v in job_targets.get(jid, {}).items()})
+        return {"ok": True}
 
     async def live_mapping(s) -> None:
         """Extend the map every few seconds while the phone is still recording."""
@@ -284,32 +446,10 @@ def create_app(data: Path, public_url: str = "") -> FastAPI:
                               level=(live.get("coverage") or {}).get("level"))
                 await hub.broadcast({"type": "scan", "id": s.id, "status": "recording", "live": live})
 
-    async def process_scan(s) -> None:
-        loop = asyncio.get_running_loop()
-
-        def progress(stage: str, frac: float) -> None:
-            asyncio.run_coroutine_threadsafe(hub.broadcast(
-                {"type": "scan", "id": s.id, "status": "processing", "stage": stage, "progress": frac}), loop)
-
-        async with processing:
-            result = await asyncio.to_thread(s.process, scan_cfg(), progress, cfg["coverage"], cfg["quality"])
-        summary = {k: result.get(k) for k in ("ok", "error", "registered", "total", "scale_method", "up_method",
-                                              "room_size_m", "timings_s", "coverage", "quality")}
-        metrics.event("scan_processed", id=s.id, **summary)
-        meta = s.meta()
-        if result["ok"] and meta.get("space_id") and meta.get("room_id"):
-            spaces.activate_scan(meta["space_id"], meta["room_id"], s.id)  # a good scan becomes the room's map
-        if meta.get("space_id") and s.count >= 10:
-            # Every scan goes into its space's map, even a weak one: it may still join through shared views.
-            spaces.add_scan(meta["space_id"], s.id)
-            asyncio.create_task(join_space(meta["space_id"], s.id))
-        await hub.broadcast({"type": "scan", "id": s.id, "room_id": meta.get("room_id"),
-                             "status": "done" if result["ok"] else "failed", **summary})
-        await hub.broadcast({"type": "space", "space": spaces.summary()})
-
     @app.get("/api/scans")
     def scan_list():
-        return scans.list()
+        in_space = {sid for sp in spaces.data["spaces"].values() for sid in sp.get("scans", [])}
+        return [m | {"in_space": m.get("id") in in_space} for m in scans.list()]
 
     @app.get("/api/scans/latest")
     def scan_latest():
@@ -389,12 +529,20 @@ def create_app(data: Path, public_url: str = "") -> FastAPI:
         return m
 
     @app.post("/api/spaces/{sid}/join")
-    async def spaces_join(sid: str):
-        """Rebuild the space's merged map now (e.g. after settings change)."""
+    async def spaces_join(sid: str, body: dict = Body(default={})):
+        """Rebuild the space's merged map now (e.g. after settings change), first adding any scans in `add`."""
         if not spaces.get(sid):
             raise HTTPException(404, "no such space")
-        asyncio.create_task(join_space(sid))
-        return {"ok": True}
+        for scan_id in body.get("add") or []:
+            s = scans.get(str(scan_id))
+            if not s or s.count < 10:
+                raise HTTPException(400, f"no usable scan {scan_id}")
+            spaces.add_scan(sid, s.id)
+        jid = await join_space(sid)
+        if not jid:
+            raise HTTPException(400, "add a scan to this space first")
+        await space_changed()
+        return {"ok": True, "job": jid}
 
     @app.post("/api/spaces/{sid}/rooms")
     async def rooms_create(sid: str, body: dict = Body(default={})):

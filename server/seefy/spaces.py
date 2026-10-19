@@ -267,6 +267,20 @@ class Spaces:
                 sp["scans"].append(scan_id)
                 self._save()
 
+    def forget_scan(self, scan_id: str) -> list[str]:
+        """Take a deleted scan out of every space and room. Returns the spaces whose map used it."""
+        hit = []
+        with self.lock:
+            for sp in self.data["spaces"].values():
+                if scan_id in sp.get("scans", []):
+                    sp["scans"].remove(scan_id)
+                    hit.append(sp["id"])
+                for r in sp["rooms"].values():
+                    if r.get("scan_id") == scan_id:
+                        r["scan_id"], r["layout_overrides"], r["overrides_scan_id"] = None, {}, None
+            self._save()
+        return hit
+
     def set_map(self, sid: str, status: str, pieces: list | None = None) -> None:
         with self.lock:
             sp = self.get(sid)

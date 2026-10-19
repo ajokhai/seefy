@@ -732,3 +732,21 @@ body[data-screen="setup"] main { max-width: 560px; margin: 0 auto; padding-botto
 .bad { color: var(--danger); font-weight: 600; }
 .guide-foot { display: flex; flex-direction: column; gap: 4px; align-items: center; }
 .link-btn.subtle { color: var(--muted); font-size: 15px; }
+
+/* Scans list and background jobs (map.ts, jobs.ts) */
+.set-row.plain { width: 100%; background: none; border: none; border-bottom: 0.5px solid var(--line); border-radius: 0; color: var(--fg); font-weight: 400; text-align: left; padding-left: 0; padding-right: 0; }
+.scan-row .set-text { flex: 1; min-width: 0; }
+.scan-row .link-btn { width: auto; flex: none; }
+.job-btns { display: flex; gap: 14px; flex: none; align-items: center; }
+.job-btns .link-btn { width: auto; }
+.job-banner { justify-content: space-between; align-items: flex-start; }
+.job-main { display: flex; flex-direction: column; gap: 4px; flex: 1; min-width: 0; color: var(--fg); }
+.job-main span { font-size: 13px; color: var(--muted); }
+.job-bar { height: 4px; border-radius: 2px; background: var(--fill); overflow: hidden; margin-top: 6px; width: 100%; }
+.job-bar > div { height: 100%; background: var(--accent); border-radius: 2px; transition: width 0.4s ease; }
+.job-bar.paused > div { background: var(--muted); }
+.job-bar.queued > div { width: 0 !important; }
+.job-bar.unknown > div { animation: job-slide 1.4s ease-in-out infinite; }
+@keyframes job-slide { 0% { transform: translateX(-100%); } 100% { transform: translateX(340%); } }
+.sheet-body .job-bar { margin: 4px 0 12px; }
+.home-job { display: flex; align-items: center; gap: 12px; text-decoration: none; }

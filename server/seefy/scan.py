@@ -125,8 +125,8 @@ class Scan:
         names = [f["name"] for f in frames]
         if len(names) - self.live_frames < cfg["live_min_new_frames"] or len(names) < 10:
             return None
-        if self.mapper is None:
-            self.mapper = reconstruct.Mapper(self.frames_dir, self.dir / "recon", cfg)
+        if self.mapper is None:  # e.g. Scan more after a restart: continue the saved map
+            self.mapper = reconstruct.Mapper.reopen(self.frames_dir, self.dir / "recon", cfg)
             self.mapper.lens = self.lens
         if not self.mapper.lock.acquire(blocking=False):
             return None
@@ -210,6 +210,24 @@ class Scan:
         return out
 
 
+SUMMARY_KEYS = ("ok", "error", "registered", "total", "scale_method", "up_method", "room_size_m", "timings_s",
+                "coverage", "quality")
+
+
+def process_job(progress, plan: dict, scan_dir: str, cfg: dict, coverage_cfg: dict | None = None,
+                quality_cfg: dict | None = None, lens: dict | None = None, fresh: bool = False) -> dict:
+    """Build a scan's map as a background job (jobs.py runs this in a child process).
+
+    Continues from the map saved during the scan (or before a restart) unless fresh is set."""
+    s = Scan(Path(scan_dir))
+    s.lens = lens
+    if not fresh:
+        s.mapper = reconstruct.Mapper.reopen(s.frames_dir, s.dir / "recon", cfg)
+        s.mapper.lens = lens
+    out = s.process(cfg, progress, coverage_cfg, quality_cfg)
+    return {k: out.get(k) for k in SUMMARY_KEYS}
+
+
 def _coverage(result: dict, cfg: dict | None, scan_cfg: dict, turn_dps: float | None = None,
               recent: tuple[int, int] | None = None) -> dict | None:
     """'Is it enough?' score for a (partial) map: level, hints, and per-component detail."""
@@ -283,6 +301,22 @@ class ScanStore:
             if (d / "meta.json").exists():
                 out.append(Scan(d).meta())
         return out
+
+    def remove(self, sid: str) -> bool:
+        """Move a scan to data/trash/ (recoverable by moving it back) and forget it."""
+        s = self.get(sid)
+        if not s:
+            return False
+        trash = self.root.parent / "trash"
+        trash.mkdir(exist_ok=True)
+        dest = trash / sid
+        n = 2
+        while dest.exists():
+            dest = trash / f"{sid}-{n}"
+            n += 1
+        s.dir.rename(dest)
+        self._scans.pop(sid, None)
+        return True
 
     def latest_result(self) -> dict | None:
         for m in self.list():

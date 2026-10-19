@@ -4,6 +4,7 @@
 // says "at home" and names no room until per-room sensing exists.
 
 import { conn, isTouch } from "./conn";
+import { isActive, jobText, onJobs, progressBar } from "./jobs";
 import { scanSpace } from "./onboarding";
 import { drawPlan } from "./plan2d";
 import { confirmSheet, fmt, h, toast } from "./ui";
@@ -15,7 +16,8 @@ export function homeScreen(): { el: HTMLElement; destroy: () => void } {
   const canvas = h("canvas", { class: "home-plan" }) as HTMLCanvasElement;
   const planEmpty = h("div", { class: "home-plan-empty" });
   const list = h("div", { class: "home-rooms" });
-  const el = h("div", { class: "home" }, hero,
+  const jobEl = h("div"); // map building in the background, if any: tap for the Map tab's controls
+  const el = h("div", { class: "home" }, hero, jobEl,
     h("a", { class: "home-map", href: "#map" }, canvas, planEmpty),
     h("h3", { class: "section-title" }, "Rooms"), list);
 
@@ -155,6 +157,15 @@ export function homeScreen(): { el: HTMLElement; destroy: () => void } {
       }
     }),
     conn.on("space_map", () => loadMap()),
+    onJobs((jobs) => {
+      const live = jobs.filter(isActive);
+      const j = live.find((x) => x.state === "running") ?? live[0];
+      jobEl.replaceChildren(...(j ? [h("a", { class: "banner busy home-job", href: "#map" },
+        h("div", { class: "job-main" },
+          h("b", {}, live.length > 1 ? `${j.label} (+${live.length - 1} waiting)` : j.label),
+          h("span", {}, jobText(j)), progressBar(j)),
+        h("span", { class: "chev" }, "›"))] : []));
+    }),
   ];
   conn.api("/api/wifi").then((r: any) => {
     if (!wifi && r) {

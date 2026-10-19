@@ -1,9 +1,10 @@
 // Map (docs/UX.md): one space's floor plan, big. Tap a room to name it; extend the map with another
-// scan (it joins automatically where the scans overlap); see the scans it's built from; switch space.
-// Data: GET /api/spaces, GET /api/spaces/{id}/map → {space, map, status, pieces}.
+// scan (it joins automatically where the scans overlap); see, rename, resume or delete its scans; switch space.
+// Data: GET /api/spaces, GET /api/spaces/{id}/map → {space, map, status, pieces}, GET /api/scans, jobs.ts.
 
 import { conn, isTouch } from "./conn";
 import { scanSpace } from "./onboarding";
+import { errMsg, isActive, jobButtons, jobFor, jobText, onJobs, progressBar, type Job } from "./jobs";
 import { drawPlan } from "./plan2d";
 import { askText, confirmSheet, fmt, h, sheet, toast } from "./ui";
 
@@ -15,6 +16,11 @@ export function mapScreen(): { el: HTMLElement; destroy: () => void } {
   let active: any = null;
   let data: any = null; // {space, map, status, pieces}
   let view = { s: 1, x0: 0, y0: 0, H: 0, ox: 0, oy: 0 };
+  let allScans: any[] = []; // GET /api/scans: every scan's meta, newest first
+  let jobs: Job[] = [];
+  // Updated on their own as jobs report progress, without redrawing the plan.
+  const mapJobEl = h("div");
+  const scansEl = h("section");
 
   async function load() {
     try {
@@ -22,6 +28,7 @@ export function mapScreen(): { el: HTMLElement; destroy: () => void } {
       spaces = r.spaces ?? [];
       active = spaces.find((s) => s.id === r.active) ?? spaces[0] ?? null;
       data = active ? await conn.api(`/api/spaces/${active.id}/map`) : null;
+      allScans = await conn.api("/api/scans");
     } catch {
       el.replaceChildren(h("div", { class: "empty-state" }, h("h2", {}, "Map isn't available"), h("p", { class: "muted" }, "Restart Seefy on this Mac, then reload.")));
       return;
@@ -61,7 +68,7 @@ export function mapScreen(): { el: HTMLElement; destroy: () => void } {
             h("h2", {}, active.name),
             h("p", { class: "muted" }, facts.join(" · ") || "Map being built")),
           h("button", { class: "pill", onclick: switchSpace }, spaces.length > 1 ? "Switch space" : "Spaces"))),
-      data?.status === "joining" ? h("div", { class: "banner busy" }, h("span", { class: "dot" }), "Joining your latest scan to the map…") : null,
+      mapJobEl,
       unjoined ? h("div", { class: "banner warn" }, `${unjoined} area${unjoined === 1 ? " isn't" : "s aren't"} joined to the map yet. Scan the place where they meet to join them.`) : null,
       h("section", { class: "map-card" },
         canvas,
@@ -70,25 +77,155 @@ export function mapScreen(): { el: HTMLElement; destroy: () => void } {
       h("div", { class: "map-actions" },
         h("button", { class: "primary", onclick: extend }, "Extend map"),
         h("button", { class: "ob-secondary", onclick: newSpace }, "Map a different place")),
-      scansList(),
+      scansEl,
     ].filter(Boolean) as Node[]));
+    renderJobs();
     requestAnimationFrame(() => draw(canvas, map));
   }
 
-  function scansList(): HTMLElement {
+  // ---- scans and the jobs building them ------------------------------------------
+
+  function renderJobs() {
+    if (!active) return;
+    const j = jobFor(jobs, { space_id: active.id });
+    const scanIds: string[] = active.scans ?? [];
+    if (j) {
+      mapJobEl.replaceChildren(h("div", { class: "banner busy job-banner" },
+        h("div", { class: "job-main" }, h("b", {}, "Joining scans into the map"), h("span", {}, jobText(j)), progressBar(j)),
+        h("div", { class: "job-btns" }, ...jobButtons(j))));
+    } else if (scanIds.length && data?.status === "none") {
+      mapJobEl.replaceChildren(h("div", { class: "banner warn job-banner" },
+        h("div", { class: "job-main" }, h("b", {}, "The map needs building"), h("span", {}, `From ${scanIds.length} scan${scanIds.length === 1 ? "" : "s"}. Uses this Mac's processor for a while.`)),
+        h("div", { class: "job-btns" }, h("button", { class: "link-btn", onclick: () => rebuildMap() }, "Build map"))));
+    } else {
+      mapJobEl.replaceChildren();
+    }
+    renderScans();
+  }
+
+  /** Scans that belong to this space, plus older ones from before spaces existed. */
+  function spaceScans(): any[] {
+    const inMap = new Set<string>(active?.scans ?? []);
+    const inRooms = new Set<string>((active?.rooms ?? []).map((r: any) => r.scan_id).filter(Boolean));
+    return allScans.filter((m) => inMap.has(m.id) || inRooms.has(m.id) || m.space_id === active?.id || !m.space_id);
+  }
+
+  function scanName(m: any): string {
+    if (m.name) return m.name;
+    const d = String(m.id).match(/^(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})/);
+    return d ? `Scan, ${when(new Date(+d[1], +d[2] - 1, +d[3], +d[4], +d[5]).getTime() / 1000)}` : `Scan ${m.id}`;
+  }
+
+  function scanStatus(m: any, j: Job | undefined): string {
+    const inMap = (active?.scans ?? []).includes(m.id);
     const pieces: any[] = data?.pieces ?? [];
-    const joinedOf = (sid: string) => pieces.find((p) => p.scans?.includes(sid))?.joined ?? true;
-    const ids: string[] = active?.scans_list ?? data?.space?.scans ?? active?.scans ?? [];
-    if (!Array.isArray(ids) || !ids.length) return h("span");
-    return h("section", {},
-      h("h3", { class: "section-title" }, "Built from"),
-      h("div", { class: "group list" }, ...ids.map((sid: string, i: number) => {
-        const d = sid.match(/^(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})/);
-        const label = d ? when(Date.UTC(+d[1], +d[2] - 1, +d[3], +d[4], +d[5]) / 1000 + new Date().getTimezoneOffset() * 60) : sid;
-        return h("a", { class: "set-row", href: `#scan/${sid}` },
-          h("div", { class: "set-text" }, h("b", {}, `Scan ${i + 1}`), h("span", {}, `${label}${joinedOf(sid) ? "" : " · not joined yet"}`)),
-          h("span", { class: "muted small" }, "Check accuracy"), h("span", { class: "chev" }, "›"));
-      })));
+    const joined = pieces.find((p) => p.scans?.includes(m.id))?.main ?? true;
+    const frames = m.frames ?? m.total;
+    if (j) return jobText(j);
+    switch (m.status) {
+      case "recording": return "Recording on a phone";
+      case "stopped": return `Stopped part-way${frames ? ` · ${frames} photos kept` : ""} · tap to resume`;
+      case "failed": return m.error ? `Didn't work: ${m.error}` : "Didn't work";
+      case "queued": case "processing": return "Waiting to be built";
+    }
+    const placed = m.registered != null && m.total ? `${m.registered} of ${m.total} photos placed` : "";
+    if (!inMap) return [placed, "not in the map yet"].filter(Boolean).join(" · ");
+    return [placed, joined ? "" : "not joined yet"].filter(Boolean).join(" · ");
+  }
+
+  function renderScans() {
+    const list = spaceScans();
+    if (!list.length) return scansEl.replaceChildren();
+    scansEl.replaceChildren(
+      h("h3", { class: "section-title" }, "Scans"),
+      h("div", { class: "group list" }, ...list.map((m) => {
+        const j = jobFor(jobs, { scan_id: m.id });
+        return h("button", { class: "set-row plain scan-row", onclick: () => scanSheet(m) },
+          h("div", { class: "set-text" }, h("b", {}, scanName(m)), h("span", {}, scanStatus(m, j)), j ? progressBar(j) : null),
+          j ? h("div", { class: "job-btns" }, ...jobButtons(j))
+            : m.status === "stopped" ? h("span", { class: "link-btn", role: "button", onclick: (e: Event) => { e.stopPropagation(); scanAction(m, "continue"); } }, "Resume")
+            : h("span", { class: "chev" }, "›"));
+      })),
+      h("p", { class: "footnote" }, "Building a map uses the processor for a few minutes per scan. Pause or stop it any time; Resume carries on from where it got to. Settings → Diagnostics → Processing sets how much of the Mac it may use."));
+  }
+
+  function scanSheet(m: any) {
+    const j = jobFor(jobs, { scan_id: m.id });
+    const inMap = (active?.scans ?? []).includes(m.id);
+    const done = m.status === "done";
+    const row = (label: string, fn: () => void, cls = "link-btn") => h("button", { class: cls, onclick: fn }, label);
+    sheet((close) => {
+      const go = (fn: () => void) => () => { close(); fn(); };
+      return h("div", { class: "sheet-body" },
+        h("h2", {}, scanName(m)),
+        h("p", { class: "muted" }, scanStatus(m, j)),
+        j ? progressBar(j) : null,
+        ...(j ? jobButtons(j).map((b) => { b.addEventListener("click", close); return b; }) : []),
+        !j && m.status === "stopped" ? row("Resume building", go(() => scanAction(m, "continue")), "primary") : null,
+        !j && m.status === "failed" ? row("Try again", go(() => scanAction(m, "continue")), "primary") : null,
+        !j && done && !inMap ? row("Add to the map", go(() => addToMap(m)), "primary") : null,
+        row("Rename", go(() => renameScan(m))),
+        done ? row("Check accuracy", go(() => { location.hash = `#scan/${m.id}`; })) : null,
+        !j && m.status !== "recording" ? row("Rebuild from scratch", go(() => scanAction(m, "reprocess"))) : null,
+        m.status !== "recording" ? row("Delete scan", go(() => deleteScan(m)), "link-btn danger") : null,
+        row("Cancel", close, "link-btn subtle"));
+    });
+  }
+
+  async function scanAction(m: any, action: "continue" | "reprocess") {
+    if (action === "reprocess" && !(await confirmSheet("Rebuild from scratch?", "Throws away this scan's map and builds it again from its photos with the current settings. Takes a few minutes of processor time.", "Rebuild"))) return;
+    try {
+      await conn.api(`/api/scans/${m.id}/${action}`, "POST");
+      toast(action === "continue" ? "Building resumed" : "Rebuilding");
+      load();
+    } catch (e: any) {
+      toast(errMsg(e));
+    }
+  }
+
+  async function addToMap(m: any) {
+    if (!(await confirmSheet(`Add ${scanName(m)} to ${active.name}?`, "Seefy joins it to the map where the scans overlap. That takes the processor a few minutes; you can pause it.", "Add and join"))) return;
+    try {
+      await conn.api(`/api/spaces/${active.id}/join`, "POST", { add: [m.id] });
+      load();
+    } catch (e: any) {
+      toast(errMsg(e));
+    }
+  }
+
+  async function rebuildMap() {
+    try {
+      await conn.api(`/api/spaces/${active.id}/join`, "POST");
+      load();
+    } catch (e: any) {
+      toast(errMsg(e));
+    }
+  }
+
+  async function renameScan(m: any) {
+    const name = await askText("Rename scan", { value: m.name ?? "", placeholder: "Living room, first pass" });
+    if (!name) return;
+    try {
+      await conn.api(`/api/scans/${m.id}`, "PATCH", { name });
+      load();
+    } catch (e: any) {
+      toast(errMsg(e));
+    }
+  }
+
+  async function deleteScan(m: any) {
+    const inMap = (active?.scans ?? []).includes(m.id);
+    const body = inMap
+      ? "It's removed from the map too, so the map needs building again from the other scans. The photos go to Seefy's trash folder on this Mac."
+      : "The photos go to Seefy's trash folder on this Mac.";
+    if (!(await confirmSheet(`Delete ${scanName(m)}?`, body, "Delete scan", true))) return;
+    try {
+      await conn.api(`/api/scans/${m.id}`, "DELETE");
+      toast("Scan deleted");
+      load();
+    } catch (e: any) {
+      toast(errMsg(e));
+    }
   }
 
   function draw(c: HTMLCanvasElement, map: any) {
@@ -222,7 +359,13 @@ export function mapScreen(): { el: HTMLElement; destroy: () => void } {
       }
     }),
     conn.on("space_map", () => load()),
-    conn.on("scan", (m) => m.status === "done" && load()),
+    conn.on("scan", (m) => ["done", "failed", "stopped", "deleted", "queued"].includes(m.status) && load()),
+    onJobs((list) => {
+      const was = jobs.filter(isActive).length;
+      jobs = list;
+      renderJobs();
+      if (was !== jobs.filter(isActive).length) load(); // a job finished: statuses changed
+    }),
   ];
   el.replaceChildren(h("div", { class: "skeleton map-skel" }));
   load();

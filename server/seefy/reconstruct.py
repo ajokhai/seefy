@@ -110,6 +110,25 @@ class Mapper:
         self.lens: dict | None = None  # the phone's lens calibration (lens.py), if any
         self.last_usage: dict = {}  # CPU and memory the last update used
 
+    @classmethod
+    def reopen(cls, images: Path, work: Path, cfg: dict) -> "Mapper":
+        """Pick up where an earlier mapper (another process, or before a restart) left off: frames
+        already in the database aren't processed again, and mapping continues from the saved model."""
+        m = cls(images, work, cfg, fresh=False)
+        _quiet_colmap()
+        import pycolmap
+
+        try:
+            if m.db.exists():
+                db = pycolmap.Database.open(str(m.db))
+                m.extracted = {im.name for im in db.read_all_images()}
+                db.close()
+            if (m.model_dir / "images.bin").exists():
+                m.rec = pycolmap.Reconstruction(str(m.model_dir))
+        except Exception:  # half-written by a cancelled job: start the model again, keep what's readable
+            m.rec = None
+        return m
+
     def _lens_prior(self, name: str) -> str:
         """Starting intrinsics for the phone's camera, as COLMAP's comma-separated params.
 

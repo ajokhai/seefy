@@ -251,3 +251,13 @@ class SpaceMap:
     def result(self) -> dict | None:
         p = self.work / "result.json"
         return json.loads(p.read_text()) if p.exists() else None
+
+
+def join_job(progress, plan: dict, root: str, scans_root: str, cfg: dict, scan_ids: list[str],
+             coverage_cfg: dict | None = None, quality_cfg: dict | None = None,
+             measured_scale: float | None = None) -> dict:
+    """Rebuild a space's merged map as a background job (jobs.py runs this in a child process).
+    The map itself is written to map/result.json; the job returns a summary."""
+    out = SpaceMap(Path(root), Path(scans_root), cfg).build(scan_ids, coverage_cfg, quality_cfg, measured_scale, progress)
+    return {k: out.get(k) for k in ("ok", "error", "pieces", "joined", "registered", "total", "timings_s", "quality",
+                                    "usage")}
