@@ -122,3 +122,44 @@ body.cam-open .tab-bar { display: none; }
 /* guide review step */
 .review-map { width: 100%; aspect-ratio: 4 / 3; border-radius: 10px; background: #14396b; display: block; margin: 8px 0; }
 .warn-text { color: var(--warn); font-weight: 600; }
+
+/* progress ring around the shutter, and the live mini-map */
+.cam-shutter-wrap { position: relative; width: 96px; height: 96px; display: grid; place-items: center; }
+.cam-ring { position: absolute; inset: 0; pointer-events: none; }
+.cam-ring svg { width: 100%; height: 100%; transform: rotate(-90deg); }
+.cam-ring .track { fill: none; stroke: rgba(255, 255, 255, 0.25); stroke-width: 6; }
+.cam-ring .fill { fill: none; stroke: #fff; stroke-width: 6; stroke-linecap: round; transition: stroke-dasharray 0.4s ease; }
+.cam-ring.enough .fill, .cam-ring.extra .fill { stroke: #30d158; }
+.cam-ring .tick { stroke: #fff; stroke-width: 3; stroke-linecap: round; }
+.cam-shutter.enough { border-color: #30d158; }
+.cam-shutter.recording.enough span { background: #30d158; }
+.cam-minimap {
+  width: 112px; height: 112px; flex: none; border-radius: 14px;
+  background: rgba(0, 0, 0, 0.45); -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+.cam-sheet.minimal .cam-hint { font-size: 22px; font-weight: 700; max-width: 360px; }
+.cam-sheet.minimal .cam-prog, .cam-sheet.minimal .cam-meter { display: none !important; }
+
+/* the scan flow's own screens (prep, finishing, review, measure) */
+.flow { position: fixed; inset: 0; z-index: 55; background: var(--bg); overflow-y: auto;
+  padding: max(20px, env(safe-area-inset-top)) max(20px, env(safe-area-inset-right)) max(24px, env(safe-area-inset-bottom)) max(20px, env(safe-area-inset-left)); }
+.flow-inner { max-width: 520px; margin: 0 auto; display: flex; flex-direction: column; gap: 14px; min-height: 100%; }
+.flow h1 { font-size: 30px; font-weight: 700; letter-spacing: -0.02em; margin: 12px 0 0; }
+.flow .lede { color: var(--muted); font-size: 17px; margin: 0; }
+.prep-card { display: flex; gap: 14px; align-items: center; background: var(--card); border-radius: 14px; padding: 16px; }
+.prep-card .ico { width: 44px; height: 44px; border-radius: 12px; display: grid; place-items: center; flex: none;
+  background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent); }
+.prep-card .ico svg { width: 26px; height: 26px; }
+.prep-card b { display: block; font-size: 17px; }
+.prep-card span { color: var(--muted); font-size: 15px; }
+.flow-actions { margin-top: auto; display: flex; flex-direction: column; gap: 6px; }
+.flow-plan { width: 100%; aspect-ratio: 1 / 1; background: var(--card); border-radius: 16px; display: block; touch-action: none; }
+.verdict { font-size: 26px; font-weight: 700; letter-spacing: -0.02em; margin: 4px 0 0; }
+.verdict.good { color: var(--ok); }
+.verdict.weak { color: var(--warn); }
+.flow .reason { font-size: 17px; margin: 0; }
+.flow .size { font-size: 17px; color: var(--muted); margin: 0; }
+.measure-row { display: flex; gap: 10px; align-items: center; }
+.measure-row input { flex: 1; font-size: 20px; min-height: 50px; text-align: center; }
+.finishing { margin: auto 0; text-align: center; display: flex; flex-direction: column; gap: 14px; }

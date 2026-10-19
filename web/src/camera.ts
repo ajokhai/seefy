@@ -16,10 +16,14 @@ export interface CameraSheet {
   setProgress(fill: number | null, enoughAt: number, label: string, level?: "short" | "enough" | "extra"): void;
   /** Turn-speed meter: current speed as a fraction of the limit (1 = at the limit). */
   setMeter(frac: number | null, label?: string): void;
+  /** Progress ring around the shutter: fill 0..1, a tick at "enough"; green once enough. Null hides it. */
+  setRing(fill: number | null, enoughAt?: number, level?: "short" | "enough" | "extra"): void;
+  /** Live top-down mini-map (only with { minimap: true }). */
+  minimap: HTMLCanvasElement | null;
   close(): void;
 }
 
-export function openCameraSheet(opts: { onShutter?: () => void; onClose?: () => void; shutterLabel?: string }): CameraSheet {
+export function openCameraSheet(opts: { onShutter?: () => void; onClose?: () => void; shutterLabel?: string; minimap?: boolean }): CameraSheet {
   const video = h("video", { playsinline: true, muted: true, autoplay: true });
   const overlay = h("canvas", { class: "cam-overlay" });
   const status = h("div", { class: "cam-status" });
@@ -33,12 +37,19 @@ export function openCameraSheet(opts: { onShutter?: () => void; onClose?: () => 
   const meterLabel = h("span", { class: "cam-meter-label" });
   const meter = h("div", { class: "cam-meter" }, h("div", { class: "cam-meter-track" }, meterFill, h("div", { class: "cam-meter-limit" })), meterLabel);
   const shutter = h("button", { class: "cam-shutter", "aria-label": opts.shutterLabel ?? "Record" }, h("span"));
+  // Ring: an SVG circle around the shutter (r = 46 in a 100 x 100 box), plus a tick at "enough".
+  const ringWrap = h("div", { class: "cam-ring" });
+  ringWrap.innerHTML = `<svg viewBox="0 0 100 100"><circle class="track" cx="50" cy="50" r="46"/>` +
+    `<circle class="fill" cx="50" cy="50" r="46" pathLength="100" stroke-dasharray="0 100"/>` +
+    `<line class="tick" x1="50" y1="0" x2="50" y2="9"/></svg>`;
+  const shutterWrap = h("div", { class: "cam-shutter-wrap" }, ringWrap, shutter);
+  const minimap = opts.minimap ? h("canvas", { class: "cam-minimap", width: 360, height: 360 }) : null;
   const closeBtn = h("button", { class: "cam-close", "aria-label": "Close camera" }, "✕");
 
   const el = h("div", { class: "cam-sheet" },
     video, overlay,
-    h("div", { class: "cam-top" }, closeBtn, h("div", { class: "cam-top-mid" }, status, meter), h("span", { class: "cam-spacer" })),
-    h("div", { class: "cam-bottom" }, prog, hint, h("div", { class: "cam-controls" }, corner, shutter, h("span", { class: "cam-spacer" }))),
+    h("div", { class: "cam-top" }, closeBtn, h("div", { class: "cam-top-mid" }, status, meter), minimap ?? h("span", { class: "cam-spacer" })),
+    h("div", { class: "cam-bottom" }, prog, hint, h("div", { class: "cam-controls" }, corner, shutterWrap, h("span", { class: "cam-spacer" }))),
   );
   document.body.append(el);
   document.body.classList.add("cam-open");
@@ -79,6 +90,17 @@ export function openCameraSheet(opts: { onShutter?: () => void; onClose?: () => 
       meter.className = `cam-meter ${frac > 2 ? "bad" : frac > 1 ? "warn" : "ok"}`;
       meterLabel.textContent = label;
     },
+    setRing(fill, enoughAt = 0.7, level = "short") {
+      ringWrap.hidden = fill == null;
+      if (fill == null) return;
+      const pct = Math.round(Math.min(1, Math.max(0, fill)) * 100);
+      ringWrap.querySelector(".fill")!.setAttribute("stroke-dasharray", `${pct} ${100 - pct}`);
+      const tick = ringWrap.querySelector(".tick") as SVGLineElement;
+      tick.setAttribute("transform", `rotate(${enoughAt * 360} 50 50)`);
+      ringWrap.className = `cam-ring ${level}`;
+      shutter.classList.toggle("enough", level !== "short");
+    },
+    minimap,
     close() {
       if (closed) return;
       closed = true;
@@ -95,6 +117,7 @@ export function openCameraSheet(opts: { onShutter?: () => void; onClose?: () => 
   sheet.setHint("");
   sheet.setProgress(null, 0.7, "");
   sheet.setMeter(null);
+  sheet.setRing(null);
   sheet.setShutter(opts.onShutter ? "idle" : "hidden");
   return sheet;
 }

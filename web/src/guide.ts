@@ -4,9 +4,9 @@
 // Optional tag mode: printed or on-screen tags for live, extra-accurate tracking.
 // Each step has one instruction and one main button; progress is remembered on this phone.
 
-import { openCameraSheet, requestMotionPermission, type CameraSheet } from "./camera";
+import { openCameraSheet, type CameraSheet } from "./camera";
 import { conn, isTouch } from "./conn";
-import { ScanRecorder, type ScanStats } from "./scan";
+import { startScan } from "./scanflow";
 import { Tracker, type FrameResult } from "./tracker";
 import { MapView } from "./mapview";
 import { fmt, h, toast } from "./ui";
@@ -78,112 +78,16 @@ export function guideScreen(): { el: HTMLElement; destroy: () => void } {
     return sp?.rooms?.find((r: any) => r.id === sp.active_room)?.name ?? null;
   };
 
-  async function openScanCamera(resumeId?: string) {
-    const motionAllowed = requestMotionPermission(); // must start inside the tap on iOS
-    let stream: MediaStream;
-    try {
-      stream = await navigator.mediaDevices.getUserMedia({
-        audio: false,
-        video: { facingMode: { ideal: "environment" }, width: { ideal: 1920 }, height: { ideal: 1080 } },
-      });
-    } catch (e: any) {
-      toast(`Camera unavailable: ${e.message ?? e}`);
-      return;
+  /** Run the full scan flow (scanflow.ts) and pick up its result here. */
+  async function runScan(resumeScanId?: string) {
+    const out = await startScan({ resumeScanId, skipPrep: !!resumeScanId });
+    if (out.scanId) {
+      scan = { ...(scan.id === out.scanId ? scan : {}), id: out.scanId };
+      if (out.action === "saved") done.add(`saved-${out.scanId}`);
+      save("seefy.guide.done", [...done]);
+      await refreshScan();
     }
-    let wake: any = null;
-    try {
-      wake = await (navigator as any).wakeLock?.request("screen");
-    } catch {
-      /* fine without */
-    }
-    const rec = { r: null as ScanRecorder | null, live: null as any };
-    const offLive = conn.on("scan", (m) => {
-      if (rec.r && m.id === rec.r.id && m.live) {
-        rec.live = m.live;
-        coach(sheet, rec.r.stats, rec.live);
-      }
-    });
-    const finish = () => {
-      offLive();
-      stream.getTracks().forEach((t) => t.stop());
-      wake?.release?.();
-    };
-    const sheet: CameraSheet = openCameraSheet({
-      shutterLabel: "Start scan",
-      onShutter: async () => {
-        if (!rec.r) {
-          rec.r = new ScanRecorder(sheet.video);
-          rec.r.onStats = (s) => coach(sheet, s, rec.live);
-          sheet.setShutter("recording");
-          try {
-            await rec.r.start(resumeId);
-          } catch (e: any) {
-            const message = e?.message ?? String(e);
-            rec.r = null;
-            sheet.setShutter("idle");
-            sheet.setHint(`Couldn't start the scan: ${message}`);
-            toast(`Couldn't start the scan: ${message}`);
-            conn.api("/api/log", "POST", { where: "scan start", message, device: conn.id }).catch(() => {});
-            return;
-          }
-          if (!(await motionAllowed)) toast("Motion sensors are off, so turn speed and scale can't be measured.");
-        } else {
-          sheet.setShutter("busy");
-          sheet.setHint("Finishing upload…");
-          try {
-            await rec.r.stop();
-            scan = { id: rec.r.id, status: "queued" };
-          } catch (e: any) {
-            toast(e.message);
-          }
-          finish();
-          sheet.close();
-          renderAll();
-        }
-      },
-      onClose: () => {
-        if (rec.r?.running) {
-          rec.r.stop().catch(() => {});
-          scan = { id: rec.r.id, status: "queued" };
-        }
-        finish();
-        renderAll();
-      },
-    });
-    sheet.video.srcObject = stream;
-    sheet.video.play().catch(() => {});
-    sheet.setStatus(roomName() ? `Ready · ${roomName()}` : "Ready");
-    sheet.setHint("Lights on. Hold the phone upright and steady. Tap the button, then walk slowly around the room, pointing across it.");
-  }
-
-  /** Live coaching on the camera: turn speed from the gyroscope (instant), coverage from the laptop's map. */
-  function coach(sheet: CameraSheet, s: ScanStats, live: any) {
-    const cfg = conn.config?.scan ?? {};
-    const limit = (cfg.max_turn_deg_per_frame ?? 5) * (cfg.capture_fps ?? 8);
-    const m = Math.floor(s.seconds / 60);
-    const sec = Math.floor(s.seconds % 60).toString().padStart(2, "0");
-    if (s.motion) sheet.setMeter(s.turnRate / limit, `${Math.round(s.turnRate)}°/s`);
-
-    const cov = live?.coverage;
-    const enoughAt = conn.config?.coverage?.enough ?? 0.7;
-    if (cov && !cov.error) {
-      const words = { short: "Keep scanning", enough: "Enough ✓ You can stop", extra: "Extra sure ✓✓" } as Record<string, string>;
-      sheet.setProgress(cov.score, enoughAt, `${words[cov.level] ?? ""} · ${live.registered} of ${live.frames} frames placed`, cov.level);
-    } else {
-      sheet.setProgress(Math.min(0.15, s.frames / 400), enoughAt, `${s.frames} frames · building the map…`);
-    }
-    sheet.setStatus(`● ${m}:${sec}`, cov?.level === "enough" || cov?.level === "extra" ? "ok" : "rec");
-
-    // Most urgent first: things the phone can see right now, then the map's advice.
-    if (s.brightness < 35) sheet.setHint("Too dark: turn on the lights.");
-    else if (s.motion && s.turnRate > 2 * limit) sheet.setHint("Turn much slower: frames are being lost.");
-    else if (s.motion && s.turnRate > limit) sheet.setHint("Turn slower.");
-    else if (s.blurry > 0.5) sheet.setHint(s.brightness < 70 ? "Blurry: more light helps, and hold the phone steady." : "Blurry: hold the phone steadier and move slower.");
-    else if (cov?.level === "extra") sheet.setHint("Room covered. Tap the button to finish.");
-    else if (cov?.level === "enough") sheet.setHint(`That's enough. ${cov.hints?.[0] ? `For extra margin: ${cov.hints[0].toLowerCase()}` : "Keep going for extra margin, or tap to finish."}`);
-    else if (cov?.hints?.length) sheet.setHint(cov.hints[0]);
-    else if (s.seconds < 8) sheet.setHint("Walk slowly around the room, pointing the camera across it at furniture, corners and doors.");
-    else sheet.setHint("Keep walking. Point across the room, not at a blank wall up close.");
+    renderAll();
   }
 
   // ---- full-screen camera: tags ----------------------------------------------
@@ -285,7 +189,7 @@ export function guideScreen(): { el: HTMLElement; destroy: () => void } {
           h("li", {}, "Not at a blank wall up close: it has nothing to lock onto"),
           h("li", {}, "The bar tells you when you've got enough")),
         roomName() ? h("p", { class: "muted" }, `Saving to: ${roomName()}`) : "",
-        h("button", { class: "primary", onclick: () => openScanCamera() }, "Open camera"),
+        h("button", { class: "primary", onclick: () => runScan() }, "Open camera"),
       ),
     },
     {
@@ -299,7 +203,7 @@ export function guideScreen(): { el: HTMLElement; destroy: () => void } {
         }
         if (scan.status === "failed") {
           b.append(h("p", { class: "bad" }, scan.error || "The map couldn't be built."),
-            h("button", { class: "primary", onclick: () => openScanCamera() }, "Scan again"));
+            h("button", { class: "primary", onclick: () => runScan() }, "Scan again"));
           return;
         }
         const stages: Record<string, string> = {
@@ -332,8 +236,8 @@ export function guideScreen(): { el: HTMLElement; destroy: () => void } {
           canvas,
           cov?.level === "short" && cov.hints?.length ? h("p", { class: "muted" }, `To improve it: ${cov.hints[0].toLowerCase()}`) : "",
           h("button", { class: "primary", onclick: () => markDone(`saved-${scan.id}`) }, "Save room"),
-          h("button", { class: "link-btn", onclick: () => openScanCamera(scan.id) }, "Scan more (adds to this scan)"),
-          h("button", { class: "link-btn subtle", onclick: () => openScanCamera() }, "Retake from scratch"),
+          h("button", { class: "link-btn", onclick: () => runScan(scan.id) }, "Scan more (adds to this scan)"),
+          h("button", { class: "link-btn subtle", onclick: () => runScan() }, "Retake from scratch"),
         );
         // Draw the plan once the canvas is in the page.
         requestAnimationFrame(async () => {
@@ -414,8 +318,8 @@ export function guideScreen(): { el: HTMLElement; destroy: () => void } {
       // Finished: always offer the next scan, never a dead end.
       ...(!current && mode === "scan" ? [h("section", { class: "card next-scan" },
         h("p", {}, roomName() ? `${roomName()} is saved.` : "Room saved."),
-        h("button", { class: "primary", onclick: () => openScanCamera() }, "New scan"),
-        scan.id ? h("button", { class: "link-btn", onclick: () => openScanCamera(scan.id) }, "Scan more of this room") : "",
+        h("button", { class: "primary", onclick: () => runScan() }, "New scan"),
+        scan.id ? h("button", { class: "link-btn", onclick: () => runScan(scan.id) }, "Scan more of this room") : "",
         h("p", { class: "muted" }, "Manage rooms in the Rooms tab."))] : []),
     );
     list.replaceChildren(...steps.map((s, i) => {

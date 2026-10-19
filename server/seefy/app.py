@@ -44,6 +44,17 @@ def create_app(data: Path, public_url: str = "") -> FastAPI:
     async def lifespan(_: FastAPI):
         hub.start()
         wifi.start()
+        # Scans interrupted by a restart (recording, queued or processing) are finished now,
+        # from their saved frames, so nothing is left stuck "processing" forever.
+        for m in scans.list():
+            if m.get("status") in ("recording", "queued", "processing"):
+                s = scans.get(m["id"])
+                if s and s.count >= 10:
+                    s.update_meta(status="queued", recovered=time.time())
+                    metrics.event("scan_recovered", id=s.id, was=m.get("status"), frames=s.count)
+                    asyncio.create_task(process_scan(s))
+                elif s:
+                    s.update_meta(status="failed", error="interrupted before enough video was saved")
         yield
         await wifi.stop()
         await hub.stop()

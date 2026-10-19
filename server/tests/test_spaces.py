@@ -32,3 +32,14 @@ def test_spaces_rooms_and_scan_targeting(tmp_path):
         assert c.delete(f"/api/spaces/{sid}/rooms/{kitchen['id']}").json()["ok"]
         assert c.delete(f"/api/spaces/{sid}").json()["ok"]
         assert c.get("/api/spaces").json()["active"] is None
+
+
+def test_interrupted_scan_is_recovered_on_startup(tmp_path):
+    import json
+    with TestClient(create_app(tmp_path)) as c:
+        sid = c.post("/api/scans/start", json={"device": "p"}).json()["id"]
+    meta = tmp_path / "scans" / sid / "meta.json"
+    assert json.loads(meta.read_text())["status"] == "recording"
+    with TestClient(create_app(tmp_path)):
+        pass  # too few frames to rebuild, so it's marked failed rather than left recording
+    assert json.loads(meta.read_text())["status"] == "failed"
