@@ -25,7 +25,7 @@ from pathlib import Path
 
 import numpy as np
 
-from . import imu, quality, reconstruct
+from . import imu, quality, reconstruct, resources
 
 
 def cross_scan_pairs(by_scan: dict[str, list[str]], every: int = 5, keyframes: int = 40) -> list[tuple[str, str]]:
@@ -89,6 +89,13 @@ class SpaceMap:
 
     def join(self, scan_ids: list[str], progress=lambda stage, frac: None) -> dict:
         """Add every scan's frames, match within and across scans, and grow the space model."""
+        p = resources.plan(self.cfg.get("processing"))
+        with resources.worker(p) as meter:
+            out = self._join(scan_ids, progress, p)
+        out["usage"] = meter.report()
+        return out
+
+    def _join(self, scan_ids: list[str], progress, p: dict) -> dict:
         reconstruct._quiet_colmap()
         import pycolmap
 
@@ -122,6 +129,7 @@ class SpaceMap:
             extraction = pycolmap.FeatureExtractionOptions()
             extraction.max_image_size = self.cfg["max_image_size"]
             extraction.sift.max_num_features = self.cfg["max_features"]
+            resources.apply(p, extraction)
             pycolmap.extract_features(self.db, self.images, image_names=new, camera_mode=pycolmap.CameraMode.SINGLE,
                                       reader_options=reader, extraction_options=extraction)
         timings["features"] = time.perf_counter() - t
@@ -132,14 +140,16 @@ class SpaceMap:
         seq = pycolmap.SequentialPairingOptions()
         seq.overlap = self.cfg["match_overlap"]
         seq.quadratic_overlap = True
-        pycolmap.match_sequential(self.db, pairing_options=seq)
+        matching = pycolmap.FeatureMatchingOptions()
+        resources.apply(p, seq, matching)
+        pycolmap.match_sequential(self.db, matching_options=matching, pairing_options=seq)
         pairs = cross_scan_pairs(by_scan, self.cfg.get("join_every", 5), self.cfg.get("join_keyframes", 40))
         if pairs:
             pair_file = self.work / "cross_pairs.txt"
             pair_file.write_text("\n".join(f"{a} {b}" for a, b in pairs))
             imported = pycolmap.ImportedPairingOptions()
             imported.match_list_path = str(pair_file)
-            pycolmap.match_image_pairs(self.db, pairing_options=imported)
+            pycolmap.match_image_pairs(self.db, matching_options=matching, pairing_options=imported)
         timings["matching"] = time.perf_counter() - t
 
         # Mapping, continuing from the space's model when there is one.
@@ -153,6 +163,7 @@ class SpaceMap:
         opts.mapper.abs_pose_min_num_inliers = self.cfg["register_min_inliers"]
         opts.mapper.abs_pose_min_inlier_ratio = 0.15
         opts.extract_colors = True
+        resources.apply(p, opts)
         out = self.work / "sparse"
         if out.exists():
             shutil.rmtree(out)
@@ -233,6 +244,7 @@ class SpaceMap:
         out["pieces"] = j["pieces"]
         out["joined"] = j["joined"]
         out["timings_s"] = j["timings_s"]
+        out["usage"] = j.get("usage")
         (self.work / "result.json").write_text(json.dumps(out))
         return out
 

@@ -252,3 +252,8 @@ from .quality import DEFAULTS as _QUALITY_DEFAULTS, DOCS as _QUALITY_DOCS  # noq
 
 DEFAULTS["quality"] = dict(_QUALITY_DEFAULTS)
 DOCS["quality"] = dict(_QUALITY_DOCS)
+
+from .resources import DEFAULTS as _PROCESSING_DEFAULTS, DOCS as _PROCESSING_DOCS  # noqa: E402
+
+DEFAULTS["processing"] = dict(_PROCESSING_DEFAULTS)
+DOCS["processing"] = dict(_PROCESSING_DOCS)

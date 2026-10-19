@@ -28,7 +28,7 @@ from typing import Callable
 
 import numpy as np
 
-from . import imu
+from . import imu, resources
 
 Progress = Callable[[str, float], None]
 
@@ -108,6 +108,7 @@ class Mapper:
         self.lock = threading.Lock()
         self.rec = None  # latest pycolmap.Reconstruction
         self.lens: dict | None = None  # the phone's lens calibration (lens.py), if any
+        self.last_usage: dict = {}  # CPU and memory the last update used
 
     def _lens_prior(self, name: str) -> str:
         """Starting intrinsics for the phone's camera, as COLMAP's comma-separated params.
@@ -136,7 +137,18 @@ class Mapper:
         return ",".join(str(round(v, 3)) for v in [f, cx, cy, *extra])
 
     def update(self, names: list[str], progress: Progress = lambda s, f: None) -> dict[str, float]:
-        """Add frames (file names in capture order) and extend the map. Returns stage timings."""
+        """Add frames (file names in capture order) and extend the map. Returns stage timings.
+
+        Runs within the Processing settings (resources.py): a share of the cores, low priority,
+        and the photo size and detail per photo they set.
+        """
+        p = resources.plan(self.cfg.get("processing"))
+        with resources.worker(p) as meter:
+            timings = self._update(names, progress, p)
+        self.last_usage = meter.report()
+        return timings
+
+    def _update(self, names: list[str], progress: Progress, p: dict) -> dict[str, float]:
         _quiet_colmap()
         import pycolmap
 
@@ -156,6 +168,7 @@ class Mapper:
             extraction = pycolmap.FeatureExtractionOptions()
             extraction.max_image_size = self.cfg["max_image_size"]
             extraction.sift.max_num_features = self.cfg["max_features"]
+            resources.apply(p, extraction)
             pycolmap.extract_features(self.db, self.images, image_names=new, camera_mode=pycolmap.CameraMode.SINGLE,
                                       reader_options=reader, extraction_options=extraction)
             self.extracted.update(new)
@@ -166,7 +179,9 @@ class Mapper:
             pairing = pycolmap.SequentialPairingOptions()
             pairing.overlap = self.cfg["match_overlap"]
             pairing.quadratic_overlap = True
-            pycolmap.match_sequential(self.db, pairing_options=pairing)  # skips pairs matched before
+            matching = pycolmap.FeatureMatchingOptions()
+            resources.apply(p, pairing, matching)
+            pycolmap.match_sequential(self.db, matching_options=matching, pairing_options=pairing)  # skips pairs matched before
             timings["matching"] = time.perf_counter() - t0
 
         progress("mapping", 0.6)
@@ -185,6 +200,7 @@ class Mapper:
         small = self.rec is None or self.rec.num_reg_images() < self.cfg.get("refine_lens_after_frames", 40)
         opts.ba_refine_focal_length = not small
         opts.ba_refine_extra_params = not small
+        resources.apply(p, opts)
         out = self.work / "sparse"
         if out.exists():
             shutil.rmtree(out)

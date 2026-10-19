@@ -19,6 +19,7 @@ from .hub import Hub
 from .lens import LensStore
 from .metrics import MetricsLog
 from .recorder import Recorder
+from . import resources
 from .scan import ScanStore
 from .spaces import Spaces
 from .spacemap import SpaceMap
@@ -39,12 +40,17 @@ def create_app(data: Path, public_url: str = "") -> FastAPI:
     hub.scans = scans
     spaces = Spaces(data / "spaces.json", scans)
     hub.spaces = spaces
+    def scan_cfg() -> dict:
+        """Scan settings plus the Processing limits (cores, priority, photo size), read fresh each time."""
+        return {**cfg["scan"], "processing": cfg["processing"]}
+
     space_maps: dict[str, SpaceMap] = {}
     joining = asyncio.Lock()  # one space join at a time; joins share the CPU with live mapping
 
     def space_map(space_id: str) -> SpaceMap:
         if space_id not in space_maps:
-            space_maps[space_id] = SpaceMap(data / "spaces" / space_id, data / "scans", cfg["scan"])
+            space_maps[space_id] = SpaceMap(data / "spaces" / space_id, data / "scans", scan_cfg())
+        space_maps[space_id].cfg = scan_cfg()  # pick up settings changes
         return space_maps[space_id]
 
     async def join_space(space_id: str, scan_id: str | None = None) -> None:
@@ -267,11 +273,12 @@ def create_app(data: Path, public_url: str = "") -> FastAPI:
     async def live_mapping(s) -> None:
         """Extend the map every few seconds while the phone is still recording."""
         while s.meta().get("status") == "recording":
-            await asyncio.sleep(cfg["scan"]["live_interval_s"])
+            # The live map refreshes no more often than the Processing setting allows.
+            await asyncio.sleep(max(cfg["scan"]["live_interval_s"], resources.plan(cfg["processing"])["live_every_s"]))
             if s.meta().get("status") != "recording":
                 break
             async with processing:
-                live = await asyncio.to_thread(s.live_update, cfg["scan"], cfg["coverage"], cfg["quality"])
+                live = await asyncio.to_thread(s.live_update, scan_cfg(), cfg["coverage"], cfg["quality"])
             if live:
                 metrics.event("scan_live", id=s.id, **{k: live.get(k) for k in ("registered", "frames", "update_s")},
                               level=(live.get("coverage") or {}).get("level"))
@@ -285,7 +292,7 @@ def create_app(data: Path, public_url: str = "") -> FastAPI:
                 {"type": "scan", "id": s.id, "status": "processing", "stage": stage, "progress": frac}), loop)
 
         async with processing:
-            result = await asyncio.to_thread(s.process, cfg["scan"], progress, cfg["coverage"], cfg["quality"])
+            result = await asyncio.to_thread(s.process, scan_cfg(), progress, cfg["coverage"], cfg["quality"])
         summary = {k: result.get(k) for k in ("ok", "error", "registered", "total", "scale_method", "up_method",
                                               "room_size_m", "timings_s", "coverage", "quality")}
         metrics.event("scan_processed", id=s.id, **summary)
