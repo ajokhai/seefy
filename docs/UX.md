@@ -12,6 +12,18 @@ screens, words and flows. `docs/PLAN.md` stays the spec for how the system works
 Setup is a cost people pay once; the home view is why they keep the app. Every screen serves one
 of those two jobs. Anything that only helps us build Seefy goes under Settings › Advanced.
 
+## Spaces, not rooms (Josh, decided)
+
+You **map a space**: one continuous map of a place (a flat, a floor of a house, an office).
+- **Extend it** by scanning another part. Seefy finds what the new scan has in common with the map
+  (the same corners, doorways, furniture) and joins it automatically. The overlap is the glue: start
+  the new scan somewhere already mapped and walk into the new area.
+- If a scan can't be joined, it's kept as a separate piece and Seefy says so: "Couldn't connect this
+  to the rest of your map. Scan the area where they meet." Joining is retried when more scans arrive.
+- **A separate location** (another home, the office) is a **new space**, mapped independently.
+- **Rooms are parts of the floor plan**, found from the walls and doorways. Seefy suggests them, and
+  you name them by tapping. Nobody has to set up rooms before scanning.
+
 ## Principles
 
 1. **One path, no decisions.** First run is a linear flow with one obvious button per screen.
@@ -34,10 +46,10 @@ Three places, the same on phone and Mac (bottom tabs on the phone, sidebar on th
 | Tab | What it is |
 |---|---|
 | **Home** | Status at a glance ("All quiet" / "Movement in the bedroom, just now"), the floor plan of the whole home with live movement, and the rooms. Default screen after setup. |
-| **Rooms** | Each room as a card: its plan, how well it's mapped, Rescan, Edit, Rename, Delete. Add a room. |
+| **Map** | The space's floor plan, big: rooms named on it, [Extend map] as the main action, Edit walls & furniture, the scans it's built from (and any unjoined pieces), switch space / New space. |
 | **Settings** | Home name, WiFi calibration ("Teach Seefy what a still home looks like"), phones and this Mac, and **Advanced**: everything engineering (sync, frame stats, accuracy inspector, tag mode, raw settings). |
 
-Scanning is an action ("Add a room", "Rescan"), not a tab. "Guide", "Live" and "Details" go away
+Scanning is an action ("Extend map", "New space"), not a tab. "Guide", "Live" and "Details" go away
 as names: onboarding replaces Guide, Home replaces Live, Settings › Advanced replaces Details.
 
 ## First run (phone)
@@ -46,8 +58,7 @@ Opened by scanning the QR on the Mac, so it's already connected. One screen at a
 
 1. **Welcome:** "Seefy maps your home with your phone, then senses movement using your WiFi. No
    cameras stay on." [Get started]
-2. **Name your home** (prefilled "My home") → **First room**: chips for Living room, Bedroom,
-   Kitchen, Office, Other.
+2. **Name this space** (chips: Home, Flat, Office, or type), then scan. No rooms to set up.
 3. **Before you scan:** three illustrated cards: lights on · move slowly, phone steady · walk
    around the room pointing the phone across it at furniture, corners and doors. [Start scanning]
 4. **Scanning** (full-screen camera; see below).
@@ -58,7 +69,8 @@ Opened by scanning the QR on the Mac, so it's already connected. One screen at a
 6. **Check the size** (optional, one tap away, strongly encouraged): "Measure one wall or a door
    for accurate distances." Pick a wall on the plan, type its length. Fixes the scale, which today
    is guessed from an assumed phone height.
-7. **Add another room?** [Scan another room] / [I'm done]
+7. **Map more of it?** [Extend the map] (start where you've already scanned, walk into the new
+   area) / [That's everything]
 8. **Teach Seefy a still home:** "Leave the room and keep still for 30 seconds." Countdown ring,
    then ✓. (WiFi still-room calibration.)
 9. **Done** → Home.
