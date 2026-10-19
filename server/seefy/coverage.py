@@ -125,8 +125,8 @@ def _views(frames: list[dict]) -> tuple[np.ndarray, np.ndarray]:
     return p, fwd
 
 
-def _heading_hint(seen: np.ndarray, last_heading: float) -> str:
-    """Point at the middle of the largest run of unseen directions, relative to where the phone faces now."""
+def _gap(seen: np.ndarray) -> tuple[int, float]:
+    """The largest run of unseen directions: (its length in bins, its middle as a heading in radians)."""
     n = len(seen)
     best_len, best_mid = 0, 0
     for start in range(n):  # a run of unseen directions starts right after a seen one
@@ -137,15 +137,20 @@ def _heading_hint(seen: np.ndarray, last_heading: float) -> str:
             length += 1
         if length > best_len:
             best_len, best_mid = length, start + (length - 1) / 2
-    if best_len == 0:  # nothing seen yet, or everything unseen
+    return best_len, ((best_mid + 0.5) * 2 * math.pi / n) % (2 * math.pi)
+
+
+def _heading_hint(gap_len: int, target: float, last_heading: float) -> str:
+    """Say how far, and which way, to turn from where the phone faced in the last placed frame."""
+    if gap_len == 0:  # nothing seen yet, or everything unseen
         return "Turn slowly to face every wall"
-    target = (best_mid + 0.5) * 2 * math.pi / n
     diff = (target - last_heading + math.pi) % (2 * math.pi) - math.pi  # + is to the left (counterclockwise)
-    if abs(diff) > 3 * math.pi / 4:
-        return "Turn to face the part of the room behind you"
-    if abs(diff) < math.pi / 4:
-        return "Keep turning: the part of the room ahead isn't covered yet"
-    return f"Turn {'left' if diff > 0 else 'right'} to face the part of the room you haven't scanned"
+    deg = int(round(abs(math.degrees(diff)) / 45) * 45)
+    if deg >= 135:
+        return "Turn around: the part of the room behind you isn't scanned yet"
+    if deg == 0:
+        return "Keep facing this way: the part of the room ahead isn't scanned yet"
+    return f"Turn about {deg}° to your {'left' if diff > 0 else 'right'}: that side of the room isn't scanned yet"
 
 
 def _detail(p: np.ndarray, fwd: np.ndarray, points, c: dict) -> dict:
@@ -186,7 +191,9 @@ def score(frames: list[dict], total_frames: int, imu: dict | None, cfg: dict, *,
         lost = captured >= c["lost_min_frames"] and placed / captured < c["lost_share"]
         result["lost"] = bool(lost)
         if lost:
-            result["hints"] = [HINTS["lost"]] + [h for h in result["hints"] if h != HINTS["lost"]][:2]
+            # Turn directions are measured from the last placed frame, which is stale once tracking is lost.
+            rest = [h for h in result["hints"] if h != HINTS["lost"] and not h.startswith(("Turn about", "Turn around", "Keep facing"))]
+            result["hints"] = [HINTS["lost"]] + rest[:2]
             result["hint"] = HINTS["lost"]
     return result
 
@@ -260,8 +267,13 @@ def _score(frames: list[dict], total_frames: int, imu: dict | None, cfg: dict, *
     if pace is not None:
         comps["pace"] = pace
 
-    heading_hint = _heading_hint(seen, float(heading[-1]))
-    return _finish(comps, c, heading_hint=heading_hint)
+    gap_len, gap_heading = _gap(seen)
+    result = _finish(comps, c, heading_hint=_heading_hint(gap_len, gap_heading, float(heading[-1])))
+    # Absolute directions in the room frame (degrees counterclockwise from +x), so the app can draw an
+    # arrow on the map instead of relying on "left" and "right".
+    result["gap_heading_deg"] = round(math.degrees(gap_heading), 1) if gap_len else None
+    result["last_heading_deg"] = round(math.degrees(float(heading[-1])), 1)
+    return result
 
 
 def _finish(comps: dict, c: dict, *, heading_hint: str = "Turn slowly to face every wall",

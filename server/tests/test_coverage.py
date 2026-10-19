@@ -149,6 +149,24 @@ def test_hints_are_ranked_weakest_first():
     assert len(r["hints"]) >= 2 and r["hint"] == r["hints"][0]
 
 
+def test_turn_hint_says_how_far_and_gives_map_direction():
+    n = 200
+    x = np.linspace(0.5, 3.5, n)
+    yaw = np.full(n, 0.0) + 0.6 * np.sin(np.linspace(0, 4 * np.pi, n))  # faces +x, never +y side
+    frames = [_frame((xi, 1.5, 1.35), y) for xi, y in zip(x, yaw)]
+    r = coverage.score(frames, n, GOOD_IMU, CFG)
+    assert "°" in r["hint"] or "around" in r["hint"], r["hint"]
+    assert r["gap_heading_deg"] is not None and 90 <= r["gap_heading_deg"] <= 270
+
+
+def test_lost_track_drops_stale_turn_directions():
+    yaw = np.linspace(0, np.pi, 150)
+    frames = [_frame((2 + 0.01 * i, 1.5, 1.35), y) for i, y in enumerate(yaw)]
+    r = coverage.score(frames, 600, GOOD_IMU, CFG, recent=(0, 40))
+    assert r["hint"].startswith("Lost track")
+    assert not any(h.startswith(("Turn about", "Turn around", "Keep facing")) for h in r["hints"]), r["hints"]
+
+
 def test_lost_track_comes_first():
     frames = _room_walk()[:120]
     ok = coverage.score(frames, 120, GOOD_IMU, CFG, recent=(30, 32))
